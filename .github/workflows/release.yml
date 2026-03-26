@@ -17,6 +17,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  NODE_VERSION: '20.18.3'
 
 jobs:
   release:
@@ -39,22 +40,77 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      - name: Build
-        run: pnpm build
+      - name: Build standalone
+        run: pnpm build:standalone
 
       - name: Determine version
         id: version
         run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
-      - name: Package prebuild
-        run: tar -czf binary-viz-${{ steps.version.outputs.tag }}-prebuild.tar.gz dist/
+      # Download Node.js binaries for self-contained builds
+      - name: Download Node.js linux-x64
+        run: |
+          curl -fsSL "https://nodejs.org/dist/v${{ env.NODE_VERSION }}/node-v${{ env.NODE_VERSION }}-linux-x64.tar.xz" -o node-linux.tar.xz
+          mkdir -p node-linux
+          tar -xf node-linux.tar.xz --strip-components=1 -C node-linux
+
+      - name: Download Node.js win-x64
+        run: |
+          curl -fsSL "https://nodejs.org/dist/v${{ env.NODE_VERSION }}/node-v${{ env.NODE_VERSION }}-win-x64.zip" -o node-win.zip
+          mkdir -p node-win
+          unzip -q node-win.zip -d node-win-tmp
+          mv node-win-tmp/node-v${{ env.NODE_VERSION }}-win-x64/* node-win/
+          rm -rf node-win-tmp
+
+      # Package Linux self-contained build
+      - name: Package Linux build
+        run: |
+          mkdir -p binary-viz-linux
+          cp dist/server.cjs binary-viz-linux/
+          cp -r dist/public binary-viz-linux/public
+          cp node-linux/bin/node binary-viz-linux/node
+          cat > binary-viz-linux/start.sh << 'SCRIPT'
+          #!/bin/sh
+          cd "$(dirname "$0")"
+          PORT="${PORT:-3000}" ./node server.cjs
+          SCRIPT
+          chmod +x binary-viz-linux/start.sh binary-viz-linux/node
+          tar -czf binary-viz-${{ steps.version.outputs.tag }}-linux-x64.tar.gz -C binary-viz-linux .
+
+      # Package Windows self-contained build
+      - name: Package Windows build
+        run: |
+          mkdir -p binary-viz-win
+          cp dist/server.cjs binary-viz-win/
+          cp -r dist/public binary-viz-win/public
+          cp node-win/node.exe binary-viz-win/node.exe
+          cat > binary-viz-win/start.bat << 'SCRIPT'
+          @echo off
+          cd /d "%~dp0"
+          set PORT=%PORT%
+          if "%PORT%"=="" set PORT=3000
+          echo Starting Binary Data Visualizer on http://localhost:%PORT%/
+          node.exe server.cjs
+          SCRIPT
+          cd binary-viz-win && zip -rq ../binary-viz-${{ steps.version.outputs.tag }}-win-x64.zip . && cd ..
+
+      # Package lightweight build (requires Node.js on the machine)
+      - name: Package lightweight build
+        run: |
+          mkdir -p binary-viz-light
+          cp dist/server.cjs binary-viz-light/
+          cp -r dist/public binary-viz-light/public
+          tar -czf binary-viz-${{ steps.version.outputs.tag }}-portable.tar.gz -C binary-viz-light .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
-          files: binary-viz-${{ steps.version.outputs.tag }}-prebuild.tar.gz
+          files: |
+            binary-viz-${{ steps.version.outputs.tag }}-linux-x64.tar.gz
+            binary-viz-${{ steps.version.outputs.tag }}-win-x64.zip
+            binary-viz-${{ steps.version.outputs.tag }}-portable.tar.gz
 
       # Docker image
       - name: Set up Docker Buildx
