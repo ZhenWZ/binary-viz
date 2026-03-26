@@ -16,6 +16,17 @@ interface DataTableProps {
 
 const ROWS_PER_PAGE = 200;
 
+function copyViaTextarea(text: string) {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+}
+
 export default function DataTable({
   data,
   diffIndices,
@@ -105,6 +116,13 @@ export default function DataTable({
 
   useEffect(() => {
     if (jumpToIndex !== null) {
+      // Scroll the target cell into view
+      requestAnimationFrame(() => {
+        const cell = tableRef.current?.querySelector(`[data-index="${jumpToIndex}"]`);
+        if (cell) {
+          cell.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      });
       const timer = setTimeout(() => setJumpToIndex(null), 2000);
       return () => clearTimeout(timer);
     }
@@ -112,10 +130,21 @@ export default function DataTable({
 
   const handleCopyAll = useCallback(() => {
     const text = data.values.map(v => formatValue(v, data.dtype, precision)).join('\n');
-    navigator.clipboard.writeText(text).then(() => {
+    const onSuccess = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    });
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(onSuccess).catch(() => {
+        // Fallback for clipboard API failure
+        copyViaTextarea(text);
+        onSuccess();
+      });
+    } else {
+      // Fallback for non-secure contexts (HTTP)
+      copyViaTextarea(text);
+      onSuccess();
+    }
   }, [data, precision]);
 
   const getHighlightClass = (index: number) => {
@@ -223,6 +252,7 @@ export default function DataTable({
                 {cells.map((cell) => (
                   <td
                     key={cell.index}
+                    data-index={cell.index}
                     className={`
                       text-right text-[12px] font-mono px-2 py-1 border-b border-border/30
                       transition-colors cursor-default
