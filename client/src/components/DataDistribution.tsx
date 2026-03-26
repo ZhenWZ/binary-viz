@@ -16,8 +16,11 @@ export default function DataDistribution({ data, height = 60 }: DataDistribution
     const finiteValues = data.values.filter((v) => Number.isFinite(v));
     if (finiteValues.length < 2) return null;
 
-    const min = Math.min(...finiteValues);
-    const max = Math.max(...finiteValues);
+    let min = Infinity, max = -Infinity;
+    for (const v of finiteValues) {
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
     if (min === max) return null;
 
     const binCount = Math.min(40, Math.max(10, Math.floor(Math.sqrt(finiteValues.length))));
@@ -29,7 +32,8 @@ export default function DataDistribution({ data, height = 60 }: DataDistribution
       bins[idx]++;
     }
 
-    const maxBin = Math.max(...bins);
+    let maxBin = 0;
+    for (const b of bins) { if (b > maxBin) maxBin = b; }
     return { bins, maxBin, min, max, binWidth, binCount };
   }, [data]);
 

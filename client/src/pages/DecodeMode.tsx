@@ -178,7 +178,7 @@ export default function DecodeMode() {
       </AnimatePresence>
 
       {/* Data Table */}
-      {decoded ? (
+      {decoded && decoded.elementCount > 0 ? (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -192,6 +192,19 @@ export default function DecodeMode() {
             label={fileName}
           />
         </motion.div>
+      ) : decoded && decoded.elementCount === 0 ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center space-y-3 max-w-md">
+            <div className="w-16 h-16 mx-auto rounded-full bg-amber-500/10 flex items-center justify-center">
+              <span className="text-2xl text-amber-400">0</span>
+            </div>
+            <h3 className="text-lg font-semibold text-foreground/70">No elements decoded</h3>
+            <p className="text-sm text-muted-foreground">
+              The file was loaded but produced zero elements with the current dtype ({decoded.dtype}).
+              Try selecting a different dtype or check the file contents.
+            </p>
+          </div>
+        </div>
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center space-y-4 max-w-md">

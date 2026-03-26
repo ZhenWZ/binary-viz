@@ -163,6 +163,9 @@ export default function CompareMode() {
   const handleBinFileB = useCallback((buf: ArrayBuffer, name: string) => {
     setSourceB(prev => ({ ...prev, buffer: buf, fileName: name }));
     setSelectedTensorB(0);
+    // Reset overrides so auto-detection kicks in for the new file
+    setOverrideDtype(null);
+    setOverrideByteOrder(null);
   }, []);
 
   const handleTxtFileA = useCallback((buf: ArrayBuffer, name: string) => {
@@ -310,7 +313,24 @@ export default function CompareMode() {
       </AnimatePresence>
 
       {/* Side-by-side Data Tables */}
-      {bothLoaded ? (
+      {bothLoaded && (decodedA!.elementCount === 0 || decodedB!.elementCount === 0) ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center space-y-3 max-w-md">
+            <div className="w-16 h-16 mx-auto rounded-full bg-amber-500/10 flex items-center justify-center">
+              <span className="text-2xl text-amber-400">0</span>
+            </div>
+            <h3 className="text-lg font-semibold text-foreground/70">Empty decoded data</h3>
+            <p className="text-sm text-muted-foreground">
+              {decodedA!.elementCount === 0 && decodedB!.elementCount === 0
+                ? 'Both sources decoded to zero elements.'
+                : decodedA!.elementCount === 0
+                  ? 'Source A decoded to zero elements.'
+                  : 'Source B decoded to zero elements.'}
+              {' '}Try a different dtype or check the source data.
+            </p>
+          </div>
+        </div>
+      ) : bothLoaded ? (
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-3">
           <motion.div
             initial={{ opacity: 0, x: -10 }}
