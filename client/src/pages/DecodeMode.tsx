@@ -1,48 +1,90 @@
 /**
  * DecodeMode - Single binary file decoder and visualizer
+ * Supports auto-detection of NumPy .npy, PyTorch .pt/.ptx, safetensors, and raw binary
  * Design: Dark Forge — layered dark surfaces, electric blue accents, monospace data display
  */
 
 import { useState, useMemo, useCallback } from 'react';
-import { type DType, type ByteOrder, decodeBinary } from '@/lib/binaryDecoder';
+import {
+  type DType,
+  type ByteOrder,
+  type FormatDetectionResult,
+  autoDecodeBinary,
+  detectFormat,
+} from '@/lib/binaryDecoder';
 import FileDropZone from '@/components/FileDropZone';
 import DTypeSelector from '@/components/DTypeSelector';
 import DataTable from '@/components/DataTable';
 import StatsPanel from '@/components/StatsPanel';
 import DataDistribution from '@/components/DataDistribution';
 import { motion, AnimatePresence } from 'framer-motion';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
 
 export default function DecodeMode() {
   const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
   const [fileName, setFileName] = useState<string>('');
-  const [dtype, setDType] = useState<DType>('float32');
-  const [byteOrder, setByteOrder] = useState<ByteOrder>('little');
+  const [overrideDtype, setOverrideDtype] = useState<DType | null>(null);
+  const [overrideByteOrder, setOverrideByteOrder] = useState<ByteOrder | null>(null);
   const [showHex, setShowHex] = useState(false);
   const [columns, setColumns] = useState(8);
-  const [offset, setOffset] = useState(0);
+  const [overrideOffset, setOverrideOffset] = useState<number | null>(null);
   const [precision, setPrecision] = useState(6);
+  const [selectedTensor, setSelectedTensor] = useState(0);
+
+  // Detect format when file is loaded
+  const formatInfo = useMemo<FormatDetectionResult | null>(() => {
+    if (!buffer) return null;
+    return detectFormat(buffer, fileName);
+  }, [buffer, fileName]);
+
+  // Effective dtype/byteOrder (auto-detected or overridden)
+  const effectiveDtype = overrideDtype ?? formatInfo?.dtype ?? 'float32';
+  const effectiveByteOrder = overrideByteOrder ?? formatInfo?.byteOrder ?? 'little';
 
   const handleFileLoaded = useCallback((buf: ArrayBuffer, name: string) => {
     setBuffer(buf);
     setFileName(name);
-    setOffset(0);
+    // Reset overrides on new file so auto-detection takes effect
+    setOverrideDtype(null);
+    setOverrideByteOrder(null);
+    setOverrideOffset(null);
+    setSelectedTensor(0);
   }, []);
 
   const handleClear = useCallback(() => {
     setBuffer(null);
     setFileName('');
-    setOffset(0);
+    setOverrideDtype(null);
+    setOverrideByteOrder(null);
+    setOverrideOffset(null);
+    setSelectedTensor(0);
   }, []);
 
   const decoded = useMemo(() => {
     if (!buffer) return null;
     try {
-      return decodeBinary(buffer, dtype, byteOrder, offset);
+      return autoDecodeBinary(
+        buffer,
+        fileName,
+        overrideDtype ?? undefined,
+        overrideByteOrder ?? undefined,
+        overrideOffset ?? undefined,
+        selectedTensor,
+      );
     } catch (e) {
       console.error('Decode error:', e);
       return null;
     }
-  }, [buffer, dtype, byteOrder, offset]);
+  }, [buffer, fileName, overrideDtype, overrideByteOrder, overrideOffset, selectedTensor]);
+
+  const hasTensors = formatInfo?.tensorEntries && formatInfo.tensorEntries.length > 1;
 
   return (
     <div className="flex flex-col h-full gap-5">
@@ -55,7 +97,7 @@ export default function DecodeMode() {
             onClear={handleClear}
             compact={!!buffer}
             label="Drop a binary file here"
-            description=".bin, .pt, .npy, .raw, or any binary dump"
+            description=".bin, .pt, .ptx, .npy, .safetensors, .raw, or any binary dump"
           />
         </div>
 
@@ -66,20 +108,52 @@ export default function DecodeMode() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
+              className="space-y-3"
             >
+              {/* Tensor selector for multi-tensor files */}
+              {hasTensors && (
+                <div className="flex items-end gap-4 flex-wrap">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Tensor</Label>
+                    <Select
+                      value={String(selectedTensor)}
+                      onValueChange={(v) => setSelectedTensor(Number(v))}
+                    >
+                      <SelectTrigger className="w-[280px] h-9 text-sm bg-secondary/50 border-border">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {formatInfo!.tensorEntries!.map((entry, idx) => (
+                          <SelectItem key={idx} value={String(idx)} className="text-sm">
+                            <span className="font-mono">{entry.name}</span>
+                            {entry.dtype && (
+                              <span className="text-muted-foreground ml-2 text-xs">
+                                ({entry.dtype}{entry.shape ? ` [${entry.shape.join('×')}]` : ''})
+                              </span>
+                            )}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
+
               <DTypeSelector
-                dtype={dtype}
-                byteOrder={byteOrder}
-                onDTypeChange={setDType}
-                onByteOrderChange={setByteOrder}
+                dtype={effectiveDtype}
+                byteOrder={effectiveByteOrder}
+                onDTypeChange={(d) => setOverrideDtype(d)}
+                onByteOrderChange={(o) => setOverrideByteOrder(o)}
                 showHex={showHex}
                 onShowHexChange={setShowHex}
                 columns={columns}
                 onColumnsChange={setColumns}
-                offset={offset}
-                onOffsetChange={setOffset}
+                offset={overrideOffset ?? formatInfo?.dataOffset ?? 0}
+                onOffsetChange={(o) => setOverrideOffset(o)}
                 precision={precision}
                 onPrecisionChange={setPrecision}
+                formatInfo={formatInfo}
+                autoDetected={!overrideDtype && formatInfo?.confidence !== 'low'}
               />
             </motion.div>
           )}
@@ -129,7 +203,8 @@ export default function DecodeMode() {
             <div>
               <h3 className="text-lg font-semibold text-foreground/70">No file loaded</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                Drop a binary file above to decode and visualize its contents
+                Drop a binary file above to decode and visualize its contents.
+                Format and dtype will be auto-detected when possible.
               </p>
             </div>
           </div>

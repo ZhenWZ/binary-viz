@@ -5,20 +5,18 @@
  */
 
 import { useState } from 'react';
-import { Binary, GitCompareArrows, FileText, Info } from 'lucide-react';
+import { Binary, GitCompareArrows, Info } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { motion } from 'framer-motion';
 import DecodeMode from './DecodeMode';
 import CompareMode from './CompareMode';
-import TxtCompareMode from './TxtCompareMode';
 
-type Mode = 'decode' | 'compare' | 'txt-compare';
+type Mode = 'decode' | 'compare';
 
 const MODES = [
-  { id: 'decode' as Mode, label: 'Decode', icon: Binary, description: 'Decode a binary file with correct dtype' },
-  { id: 'compare' as Mode, label: 'Compare', icon: GitCompareArrows, description: 'Compare two binary files side-by-side' },
-  { id: 'txt-compare' as Mode, label: 'Txt vs Bin', icon: FileText, description: 'Compare text values with binary data' },
+  { id: 'decode' as Mode, label: 'Decode', icon: Binary, description: 'Auto-detect and decode binary files' },
+  { id: 'compare' as Mode, label: 'Compare', icon: GitCompareArrows, description: 'Compare binary or text sources side-by-side' },
 ];
 
 export default function Home() {
@@ -73,10 +71,13 @@ export default function Home() {
               </TooltipTrigger>
               <TooltipContent side="bottom" className="max-w-xs text-xs">
                 <p className="font-semibold mb-1">Supported formats:</p>
-                <p>Binary: .bin, .pt, .npy, .raw, or any binary dump</p>
+                <p>NumPy .npy, PyTorch .pt/.ptx, Safetensors, raw binary</p>
                 <p>Text: .txt, .csv, .log with numeric values</p>
                 <p className="mt-1 font-semibold">Supported dtypes:</p>
-                <p>float16, bfloat16, float32, float64, int8/16/32/64, uint8/16/32/64, bool</p>
+                <p>float8 (E4M3, E5M2, E8M0), float16, bfloat16, float32, float64</p>
+                <p>int8/16/32/64, uint8/16/32/64, bool</p>
+                <p className="mt-1 font-semibold">Auto-detection:</p>
+                <p>Format and dtype are automatically detected for .npy, .pt, .ptx, and .safetensors files</p>
               </TooltipContent>
             </Tooltip>
           </div>
@@ -95,7 +96,6 @@ export default function Home() {
           >
             {mode === 'decode' && <DecodeMode />}
             {mode === 'compare' && <CompareMode />}
-            {mode === 'txt-compare' && <TxtCompareMode />}
           </motion.div>
         </div>
       </main>
