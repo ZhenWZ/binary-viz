@@ -158,6 +158,8 @@ export interface FormatDetectionResult {
   tensorEntries?: TensorEntry[];
   confidence: 'high' | 'medium' | 'low';
   description: string;
+  /** Whether any tensor entries use compression (PyTorch ZIP) */
+  hasCompressed?: boolean;
 }
 
 export interface TensorEntry {
@@ -166,6 +168,10 @@ export interface TensorEntry {
   shape?: number[];
   dataOffset: number;
   dataLength: number;
+  /** Size of compressed data in buffer (for compressed PyTorch entries) */
+  compressedSize?: number;
+  /** ZIP compression method (0 = stored, 8 = deflate) */
+  compressionMethod?: number;
 }
 
 /**
@@ -285,7 +291,7 @@ function parsePytorchZip(buffer: ArrayBuffer): FormatDetectionResult | null {
   }
 
   // Find all local file headers and catalog entries
-  const entries: { name: string; offset: number; compressedSize: number; uncompressedSize: number }[] = [];
+  const entries: { name: string; offset: number; compressedSize: number; uncompressedSize: number; compressionMethod: number }[] = [];
 
   // Find End of Central Directory record (EOCD)
   let eocdOffset = -1;
@@ -313,6 +319,7 @@ function parsePytorchZip(buffer: ArrayBuffer): FormatDetectionResult | null {
     const nameLen = view.getUint16(pos + 28, true);
     const extraLen = view.getUint16(pos + 30, true);
     const commentLen = view.getUint16(pos + 32, true);
+    const compressionMethod = view.getUint16(pos + 10, true);
     const compressedSize = view.getUint32(pos + 20, true);
     const uncompressedSize = view.getUint32(pos + 24, true);
     const localHeaderOffset = view.getUint32(pos + 42, true);
@@ -328,7 +335,7 @@ function parsePytorchZip(buffer: ArrayBuffer): FormatDetectionResult | null {
       dataOffset = localHeaderOffset + 30 + localNameLen + localExtraLen;
     }
 
-    entries.push({ name, offset: dataOffset, compressedSize, uncompressedSize });
+    entries.push({ name, offset: dataOffset, compressedSize, uncompressedSize, compressionMethod });
     pos += 46 + nameLen + extraLen + commentLen;
   }
 
@@ -337,12 +344,13 @@ function parsePytorchZip(buffer: ArrayBuffer): FormatDetectionResult | null {
 
 function parsePytorchLocalHeaders(buffer: ArrayBuffer, bytes: Uint8Array): FormatDetectionResult | null {
   const view = new DataView(buffer);
-  const entries: { name: string; offset: number; compressedSize: number; uncompressedSize: number }[] = [];
+  const entries: { name: string; offset: number; compressedSize: number; uncompressedSize: number; compressionMethod: number }[] = [];
   let pos = 0;
 
   while (pos < bytes.length - 30) {
     if (bytes[pos] !== 0x50 || bytes[pos + 1] !== 0x4b || bytes[pos + 2] !== 0x03 || bytes[pos + 3] !== 0x04) break;
 
+    const compressionMethod = view.getUint16(pos + 8, true);
     const compressedSize = view.getUint32(pos + 18, true);
     const uncompressedSize = view.getUint32(pos + 22, true);
     const nameLen = view.getUint16(pos + 26, true);
@@ -352,15 +360,46 @@ function parsePytorchLocalHeaders(buffer: ArrayBuffer, bytes: Uint8Array): Forma
     const name = new TextDecoder().decode(nameBytes);
     const dataOffset = pos + 30 + nameLen + extraLen;
 
-    entries.push({ name, offset: dataOffset, compressedSize, uncompressedSize });
+    entries.push({ name, offset: dataOffset, compressedSize, uncompressedSize, compressionMethod });
     pos = dataOffset + compressedSize;
   }
 
   return buildPytorchResult(entries, buffer);
 }
 
+/**
+ * Decompress DEFLATE data using the browser's DecompressionStream API.
+ * Returns the decompressed bytes, or null if decompression fails.
+ */
+async function decompressDeflateRaw(compressedData: Uint8Array): Promise<Uint8Array | null> {
+  try {
+    const ds = new DecompressionStream('deflate-raw');
+    const writer = ds.writable.getWriter();
+    const reader = ds.readable.getReader();
+    writer.write(compressedData);
+    writer.close();
+    const chunks: Uint8Array[] = [];
+    let totalLen = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      totalLen += value.byteLength;
+    }
+    const result = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
 function buildPytorchResult(
-  entries: { name: string; offset: number; compressedSize: number; uncompressedSize: number }[],
+  entries: { name: string; offset: number; compressedSize: number; uncompressedSize: number; compressionMethod: number }[],
   buffer: ArrayBuffer
 ): FormatDetectionResult | null {
   if (entries.length === 0) return null;
@@ -369,6 +408,9 @@ function buildPytorchResult(
   const dataEntries = entries.filter(e =>
     e.name.includes('/data/') && !e.name.endsWith('/') && e.compressedSize > 0
   );
+
+  // Check if any data entry uses compression
+  const hasCompressed = dataEntries.some(e => e.compressionMethod !== 0);
 
   // Also check for .pkl files to confirm this is PyTorch
   const hasPkl = entries.some(e => e.name.endsWith('.pkl'));
@@ -379,7 +421,9 @@ function buildPytorchResult(
     return {
       name: tensorName,
       dataOffset: e.offset,
-      dataLength: e.compressedSize, // For stored (uncompressed) entries, these are equal
+      dataLength: e.compressionMethod === 0 ? e.compressedSize : e.uncompressedSize,
+      compressedSize: e.compressedSize,
+      compressionMethod: e.compressionMethod,
     };
   });
 
@@ -390,21 +434,22 @@ function buildPytorchResult(
       tensorEntries.push({
         name: largest.name,
         dataOffset: largest.offset,
-        dataLength: largest.compressedSize,
+        dataLength: largest.compressionMethod === 0 ? largest.compressedSize : largest.uncompressedSize,
       });
     }
   }
 
-  const entryNames = entries.map(e => e.name).join(', ');
   const totalDataBytes = tensorEntries.reduce((sum, t) => sum + t.dataLength, 0);
+  const compressedNote = hasCompressed ? ' (contains compressed entries)' : '';
 
   return {
     format: 'pytorch',
     confidence: hasPkl ? 'high' : 'medium',
-    description: `PyTorch ZIP archive — ${entries.length} entries, ${tensorEntries.length} tensor(s), ${formatBytes(totalDataBytes)} data`,
+    description: `PyTorch ZIP archive — ${entries.length} entries, ${tensorEntries.length} tensor(s), ${formatBytes(totalDataBytes)} data${compressedNote}`,
     tensorEntries,
     dataOffset: tensorEntries.length > 0 ? tensorEntries[0].dataOffset : 0,
     dataLength: tensorEntries.length > 0 ? tensorEntries[0].dataLength : 0,
+    hasCompressed,
   };
 }
 
@@ -527,6 +572,10 @@ export interface DecodedData {
   bytesPerElement: number;
   shape?: number[];
   formatInfo?: FormatDetectionResult;
+  /** Offset into rawBytes where the decoded data starts (for hex display) */
+  dataOffset?: number;
+  /** True if any int64/uint64 value exceeded Number.MAX_SAFE_INTEGER during decoding */
+  hasPrecisionLoss?: boolean;
 }
 
 /**
@@ -549,6 +598,7 @@ export function decodeBinary(
   const elementCount = count !== undefined ? Math.min(count, maxElements) : maxElements;
 
   const values: number[] = new Array(elementCount);
+  let hasPrecisionLoss = false;
 
   for (let i = 0; i < elementCount; i++) {
     const pos = offset + i * info.bytes;
@@ -588,6 +638,9 @@ export function decodeBinary(
       case 'int64': {
         const bigVal = dataView.getBigInt64(pos, littleEndian);
         value = Number(bigVal);
+        if (bigVal > BigInt(Number.MAX_SAFE_INTEGER) || bigVal < BigInt(-Number.MAX_SAFE_INTEGER)) {
+          hasPrecisionLoss = true;
+        }
         break;
       }
       case 'uint8':
@@ -602,6 +655,9 @@ export function decodeBinary(
       case 'uint64': {
         const bigUVal = dataView.getBigUint64(pos, littleEndian);
         value = Number(bigUVal);
+        if (bigUVal > BigInt(Number.MAX_SAFE_INTEGER)) {
+          hasPrecisionLoss = true;
+        }
         break;
       }
       case 'bool':
@@ -622,6 +678,7 @@ export function decodeBinary(
     elementCount,
     totalBytes: buffer.byteLength,
     bytesPerElement: info.bytes,
+    hasPrecisionLoss: hasPrecisionLoss || undefined,
   };
 }
 
@@ -643,19 +700,65 @@ export function autoDecodeBinary(
   let offset = overrideOffset ?? formatInfo.dataOffset ?? 0;
   let count: number | undefined;
   let shape = formatInfo.shape;
+  let dataOffset = offset; // Track the data offset for hex display
 
   // For formats with multiple tensors, use selected tensor
   if (formatInfo.tensorEntries && formatInfo.tensorEntries.length > 0) {
     const idx = selectedTensorIndex ?? 0;
     const entry = formatInfo.tensorEntries[Math.min(idx, formatInfo.tensorEntries.length - 1)];
     if (overrideOffset === undefined) offset = entry.dataOffset;
+    dataOffset = offset;
     count = Math.floor(entry.dataLength / DTYPE_INFO[dtype].bytes);
     if (entry.dtype && !overrideDtype) dtype = entry.dtype;
     if (entry.shape) shape = entry.shape;
   }
 
   const decoded = decodeBinary(buffer, dtype, byteOrder, offset, count);
-  return { ...decoded, shape, formatInfo };
+  return { ...decoded, shape, formatInfo, dataOffset };
+}
+
+/**
+ * Async version of autoDecodeBinary that handles compressed PyTorch entries.
+ * Falls back to sync autoDecodeBinary for non-compressed formats.
+ */
+export async function autoDecodeBinaryAsync(
+  buffer: ArrayBuffer,
+  fileName?: string,
+  overrideDtype?: DType,
+  overrideByteOrder?: ByteOrder,
+  overrideOffset?: number,
+  selectedTensorIndex?: number,
+): Promise<DecodedData & { formatInfo: FormatDetectionResult }> {
+  const formatInfo = detectFormat(buffer, fileName);
+
+  // Check if this is a PyTorch file with compressed entries
+  if (formatInfo.hasCompressed && formatInfo.tensorEntries) {
+    const idx = selectedTensorIndex ?? 0;
+    const entry = formatInfo.tensorEntries[Math.min(idx, formatInfo.tensorEntries.length - 1)];
+
+    if (entry.compressionMethod && entry.compressionMethod !== 0 && entry.compressedSize) {
+      // Need to decompress
+      const compressedBytes = new Uint8Array(buffer, entry.dataOffset, entry.compressedSize);
+      const decompressed = await decompressDeflateRaw(compressedBytes);
+
+      if (!decompressed) {
+        throw new Error(
+          'Failed to decompress PyTorch tensor data. The file uses DEFLATE compression. ' +
+          'Try re-saving with: torch.save(tensor, path, _use_new_zipfile_serialization=True)'
+        );
+      }
+
+      // Decode from the decompressed buffer
+      let dtype = overrideDtype ?? entry.dtype ?? formatInfo.dtype ?? 'float32';
+      let byteOrder = overrideByteOrder ?? formatInfo.byteOrder ?? 'little';
+      const shape = entry.shape ?? formatInfo.shape;
+      const decoded = decodeBinary(decompressed.buffer, dtype, byteOrder, 0);
+      return { ...decoded, shape, formatInfo, dataOffset: 0 };
+    }
+  }
+
+  // Non-compressed: use sync path
+  return autoDecodeBinary(buffer, fileName, overrideDtype, overrideByteOrder, overrideOffset, selectedTensorIndex);
 }
 
 // ─── Formatting Utilities ────────────────────────────────────────────────────
@@ -689,9 +792,9 @@ export function getHexBytes(rawBytes: Uint8Array, index: number, bytesPerElement
 }
 
 export function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
@@ -739,32 +842,37 @@ export function compareData(
 // ─── Text Parsing ────────────────────────────────────────────────────────────
 
 export function parseTxtData(text: string): number[] {
-  let cleaned = text
-    .replace(/^tensor\s*\(\s*/i, '')
-    .replace(/\)\s*$/i, '')
-    .replace(/^array\s*\(\s*/i, '')
-    .replace(/\)\s*$/i, '')
-    .replace(/dtype\s*=\s*[\w.]+/gi, '')
-    .replace(/\[\s*/g, '')
-    .replace(/\s*\]/g, '')
-    .replace(/\(\s*/g, '')
-    .replace(/\s*\)/g, '');
+  // Step 1: Strip known wrapper functions (tensor(...), array(...), etc.)
+  let cleaned = text.trim();
 
-  const tokens = cleaned.split(/[\s,;]+/).filter(t => t.length > 0);
+  // Remove outer tensor/array wrappers (handles nested parens correctly)
+  cleaned = cleaned.replace(/^tensor\s*\(/i, '').replace(/^array\s*\(/i, '');
+
+  // Step 2: Strip known keyword arguments (dtype=..., device=..., requires_grad=..., etc.)
+  // Handle both quoted and unquoted values
+  cleaned = cleaned.replace(/,?\s*(dtype|device|requires_grad|grad_fn|layout|pin_memory|memory_format)\s*=\s*('[^']*'|"[^"]*"|[\w.:]+)/gi, '');
+
+  // Step 3: Remove all structural characters: brackets, parens
+  cleaned = cleaned.replace(/[\[\]()]/g, '');
+
+  // Step 4: Tokenize on whitespace, commas, semicolons, and newlines
+  const tokens = cleaned.split(/[\s,;\n]+/).filter(t => t.length > 0);
   const values: number[] = [];
 
   for (const token of tokens) {
     const trimmed = token.trim();
-    if (trimmed === '') continue;
+    if (trimmed === '' || trimmed === '...' || trimmed === '\u2026') continue;
 
-    if (trimmed.toLowerCase() === 'nan') { values.push(NaN); }
-    else if (trimmed.toLowerCase() === 'inf' || trimmed.toLowerCase() === '+inf') { values.push(Infinity); }
-    else if (trimmed.toLowerCase() === '-inf') { values.push(-Infinity); }
-    else if (trimmed.toLowerCase() === 'true') { values.push(1); }
-    else if (trimmed.toLowerCase() === 'false') { values.push(0); }
+    const lower = trimmed.toLowerCase();
+    if (lower === 'nan') { values.push(NaN); }
+    else if (lower === 'inf' || lower === '+inf') { values.push(Infinity); }
+    else if (lower === '-inf') { values.push(-Infinity); }
+    else if (lower === 'true') { values.push(1); }
+    else if (lower === 'false') { values.push(0); }
     else {
       const num = Number(trimmed);
-      if (!isNaN(num) || trimmed === 'NaN') { values.push(num); }
+      if (!isNaN(num)) { values.push(num); }
+      // Skip non-numeric tokens silently (e.g. leftover keyword fragments)
     }
   }
 

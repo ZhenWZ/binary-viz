@@ -4,12 +4,13 @@
  * Design: Dark Forge — layered dark surfaces, electric blue accents, monospace data display
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   type DType,
   type ByteOrder,
   type FormatDetectionResult,
-  autoDecodeBinary,
+  type DecodedData,
+  autoDecodeBinaryAsync,
   detectFormat,
 } from '@/lib/binaryDecoder';
 import FileDropZone from '@/components/FileDropZone';
@@ -67,21 +68,22 @@ export default function DecodeMode() {
     setSelectedTensor(0);
   }, []);
 
-  const decoded = useMemo(() => {
-    if (!buffer) return null;
-    try {
-      return autoDecodeBinary(
-        buffer,
-        fileName,
-        overrideDtype ?? undefined,
-        overrideByteOrder ?? undefined,
-        overrideOffset ?? undefined,
-        selectedTensor,
-      );
-    } catch (e) {
-      console.error('Decode error:', e);
-      return null;
-    }
+  const [decoded, setDecoded] = useState<(DecodedData & { formatInfo: FormatDetectionResult }) | null>(null);
+
+  useEffect(() => {
+    if (!buffer) { setDecoded(null); return; }
+    let cancelled = false;
+    autoDecodeBinaryAsync(
+      buffer,
+      fileName,
+      overrideDtype ?? undefined,
+      overrideByteOrder ?? undefined,
+      overrideOffset ?? undefined,
+      selectedTensor,
+    )
+      .then(result => { if (!cancelled) setDecoded(result); })
+      .catch(e => { console.error('Decode error:', e); if (!cancelled) setDecoded(null); });
+    return () => { cancelled = true; };
   }, [buffer, fileName, overrideDtype, overrideByteOrder, overrideOffset, selectedTensor]);
 
   const hasTensors = formatInfo?.tensorEntries && formatInfo.tensorEntries.length > 1;
@@ -172,13 +174,18 @@ export default function DecodeMode() {
             <div className="space-y-3">
               <StatsPanel data={decoded} />
               <DataDistribution data={decoded} />
+              {decoded.hasPrecisionLoss && (
+                <div className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs">
+                  Some {decoded.dtype} values exceed 2&#x2075;&#xB3; and may have lost precision. Values beyond &#xB1;9,007,199,254,740,991 are approximate.
+                </div>
+              )}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Data Table */}
-      {decoded ? (
+      {decoded && decoded.elementCount > 0 ? (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -192,6 +199,19 @@ export default function DecodeMode() {
             label={fileName}
           />
         </motion.div>
+      ) : decoded && decoded.elementCount === 0 ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center space-y-3 max-w-md">
+            <div className="w-16 h-16 mx-auto rounded-full bg-amber-500/10 flex items-center justify-center">
+              <span className="text-2xl text-amber-400">0</span>
+            </div>
+            <h3 className="text-lg font-semibold text-foreground/70">No elements decoded</h3>
+            <p className="text-sm text-muted-foreground">
+              The file was loaded but produced zero elements with the current dtype ({decoded.dtype}).
+              Try selecting a different dtype or check the file contents.
+            </p>
+          </div>
+        </div>
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center space-y-4 max-w-md">

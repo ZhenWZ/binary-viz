@@ -17,10 +17,10 @@ export default function DiffSummaryBar({ totalElements, diffIndices, height = 24
   const buckets = new Array(bucketCount).fill(0);
   const elementsPerBucket = totalElements / bucketCount;
 
-  for (const idx of Array.from(diffIndices)) {
+  diffIndices.forEach(idx => {
     const bucket = Math.min(bucketCount - 1, Math.floor(idx / elementsPerBucket));
     buckets[bucket]++;
-  }
+  });
 
   const maxBucket = Math.max(...buckets, 1);
 

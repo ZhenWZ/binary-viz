@@ -54,7 +54,7 @@ export default function DataTable({
           cells.push({
             index: idx,
             value: data.values[idx],
-            hex: showHex ? getHexBytes(data.rawBytes, idx, data.bytesPerElement) : '',
+            hex: showHex ? getHexBytes(data.rawBytes, idx, data.bytesPerElement, data.dataOffset ?? 0) : '',
           });
         }
       }
