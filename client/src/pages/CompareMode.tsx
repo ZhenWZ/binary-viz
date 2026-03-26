@@ -32,7 +32,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FileText, Binary, Upload } from 'lucide-react';
+import { FileText, Binary, Upload, GitCompareArrows } from 'lucide-react';
 
 type SourceType = 'binary' | 'text';
 
@@ -377,11 +377,9 @@ export default function CompareMode() {
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center space-y-4 max-w-lg">
-            <img
-              src="https://d2xsxph8kpxj0f.cloudfront.net/310519663472103077/44zCd7HYXUAAc3HQPKSjpf/compare-illustration-C73JURWf9mv3J2jKWsgDcH.webp"
-              alt="Compare files"
-              className="w-64 mx-auto opacity-30"
-            />
+            <div className="w-64 mx-auto opacity-30 flex items-center justify-center">
+              <GitCompareArrows className="w-24 h-24 text-muted-foreground" />
+            </div>
             <div>
               <h3 className="text-lg font-semibold text-foreground/70">Load two sources to compare</h3>
               <p className="text-sm text-muted-foreground mt-1">

@@ -9,6 +9,7 @@
     "build:standalone": "vite build && esbuild server/standalone.ts --platform=node --bundle --format=cjs --outfile=dist/server.cjs",
     "start": "NODE_ENV=production node dist/index.js",
     "preview": "vite preview --host",
+    "build:extension": "vite build --config vite.config.extension.ts && mv dist/extension/extension.html dist/extension/index.html",
     "test": "vitest run",
     "check": "tsc --noEmit",
     "format": "prettier --write ."

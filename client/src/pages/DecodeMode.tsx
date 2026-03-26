@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
+import { Binary } from 'lucide-react';
 
 export default function DecodeMode() {
   const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
@@ -215,11 +216,9 @@ export default function DecodeMode() {
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center space-y-4 max-w-md">
-            <img
-              src="https://d2xsxph8kpxj0f.cloudfront.net/310519663472103077/44zCd7HYXUAAc3HQPKSjpf/empty-state-EPgrJ6eE6m8spmc6UkRQjt.webp"
-              alt="Drop a file"
-              className="w-48 h-48 mx-auto opacity-40"
-            />
+            <div className="w-48 h-48 mx-auto opacity-40 flex items-center justify-center">
+              <Binary className="w-20 h-20 text-muted-foreground" />
+            </div>
             <div>
               <h3 className="text-lg font-semibold text-foreground/70">No file loaded</h3>
               <p className="text-sm text-muted-foreground mt-1">
