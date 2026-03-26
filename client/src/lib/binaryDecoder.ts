@@ -158,6 +158,8 @@ export interface FormatDetectionResult {
   tensorEntries?: TensorEntry[];
   confidence: 'high' | 'medium' | 'low';
   description: string;
+  /** Whether any tensor entries use compression (PyTorch ZIP) */
+  hasCompressed?: boolean;
 }
 
 export interface TensorEntry {
@@ -166,6 +168,10 @@ export interface TensorEntry {
   shape?: number[];
   dataOffset: number;
   dataLength: number;
+  /** Size of compressed data in buffer (for compressed PyTorch entries) */
+  compressedSize?: number;
+  /** ZIP compression method (0 = stored, 8 = deflate) */
+  compressionMethod?: number;
 }
 
 /**
@@ -415,11 +421,10 @@ function buildPytorchResult(
     return {
       name: tensorName,
       dataOffset: e.offset,
-      // Use uncompressedSize for the logical data length, compressedSize for reading from buffer
       dataLength: e.compressionMethod === 0 ? e.compressedSize : e.uncompressedSize,
-      _compressedSize: e.compressedSize,
-      _compressionMethod: e.compressionMethod,
-    } as TensorEntry;
+      compressedSize: e.compressedSize,
+      compressionMethod: e.compressionMethod,
+    };
   });
 
   // If no data entries found, treat the largest entry as potential data
@@ -444,9 +449,8 @@ function buildPytorchResult(
     tensorEntries,
     dataOffset: tensorEntries.length > 0 ? tensorEntries[0].dataOffset : 0,
     dataLength: tensorEntries.length > 0 ? tensorEntries[0].dataLength : 0,
-    _hasCompressed: hasCompressed,
-    _buffer: hasCompressed ? buffer : undefined,
-  } as FormatDetectionResult;
+    hasCompressed,
+  };
 }
 
 /**
@@ -570,6 +574,8 @@ export interface DecodedData {
   formatInfo?: FormatDetectionResult;
   /** Offset into rawBytes where the decoded data starts (for hex display) */
   dataOffset?: number;
+  /** True if any int64/uint64 value exceeded Number.MAX_SAFE_INTEGER during decoding */
+  hasPrecisionLoss?: boolean;
 }
 
 /**
@@ -592,6 +598,7 @@ export function decodeBinary(
   const elementCount = count !== undefined ? Math.min(count, maxElements) : maxElements;
 
   const values: number[] = new Array(elementCount);
+  let hasPrecisionLoss = false;
 
   for (let i = 0; i < elementCount; i++) {
     const pos = offset + i * info.bytes;
@@ -631,6 +638,9 @@ export function decodeBinary(
       case 'int64': {
         const bigVal = dataView.getBigInt64(pos, littleEndian);
         value = Number(bigVal);
+        if (bigVal > BigInt(Number.MAX_SAFE_INTEGER) || bigVal < BigInt(-Number.MAX_SAFE_INTEGER)) {
+          hasPrecisionLoss = true;
+        }
         break;
       }
       case 'uint8':
@@ -645,6 +655,9 @@ export function decodeBinary(
       case 'uint64': {
         const bigUVal = dataView.getBigUint64(pos, littleEndian);
         value = Number(bigUVal);
+        if (bigUVal > BigInt(Number.MAX_SAFE_INTEGER)) {
+          hasPrecisionLoss = true;
+        }
         break;
       }
       case 'bool':
@@ -665,6 +678,7 @@ export function decodeBinary(
     elementCount,
     totalBytes: buffer.byteLength,
     bytesPerElement: info.bytes,
+    hasPrecisionLoss: hasPrecisionLoss || undefined,
   };
 }
 
@@ -718,15 +732,13 @@ export async function autoDecodeBinaryAsync(
   const formatInfo = detectFormat(buffer, fileName);
 
   // Check if this is a PyTorch file with compressed entries
-  const fi = formatInfo as any;
-  if (fi._hasCompressed && fi._buffer && formatInfo.tensorEntries) {
+  if (formatInfo.hasCompressed && formatInfo.tensorEntries) {
     const idx = selectedTensorIndex ?? 0;
-    const entry = formatInfo.tensorEntries[Math.min(idx, formatInfo.tensorEntries.length - 1)] as any;
-    const compressionMethod = entry._compressionMethod ?? 0;
+    const entry = formatInfo.tensorEntries[Math.min(idx, formatInfo.tensorEntries.length - 1)];
 
-    if (compressionMethod !== 0) {
+    if (entry.compressionMethod && entry.compressionMethod !== 0 && entry.compressedSize) {
       // Need to decompress
-      const compressedBytes = new Uint8Array(buffer, entry.dataOffset, entry._compressedSize);
+      const compressedBytes = new Uint8Array(buffer, entry.dataOffset, entry.compressedSize);
       const decompressed = await decompressDeflateRaw(compressedBytes);
 
       if (!decompressed) {
