@@ -24,8 +24,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: pnpm/action-setup@v4
 
@@ -40,8 +38,31 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      - name: Build standalone
-        run: pnpm build:standalone
+      - name: Build frontend
+        run: npx vite build
+
+      - name: Build standalone server
+        run: |
+          cat > /tmp/standalone.ts << 'SERVEREOF'
+          import express from "express";
+          import { createServer } from "http";
+          import path from "path";
+          async function startServer() {
+            const app = express();
+            const server = createServer(app);
+            const staticPath = path.resolve(__dirname, "public");
+            app.use(express.static(staticPath));
+            app.get("/{*splat}", (_req, res) => {
+              res.sendFile(path.join(staticPath, "index.html"));
+            });
+            const port = process.env.PORT || 3000;
+            server.listen(port, () => {
+              console.log(`Binary Data Visualizer running at http://localhost:${port}/`);
+            });
+          }
+          startServer().catch(console.error);
+          SERVEREOF
+          npx esbuild /tmp/standalone.ts --platform=node --bundle --format=cjs --outfile=dist/server.cjs
 
       - name: Determine version
         id: version
@@ -69,11 +90,7 @@ jobs:
           cp dist/server.cjs binary-viz-linux/
           cp -r dist/public binary-viz-linux/public
           cp node-linux/bin/node binary-viz-linux/node
-          cat > binary-viz-linux/start.sh << 'SCRIPT'
-          #!/bin/sh
-          cd "$(dirname "$0")"
-          PORT="${PORT:-3000}" ./node server.cjs
-          SCRIPT
+          printf '#!/bin/sh\ncd "$(dirname "$0")"\nPORT="${PORT:-3000}" ./node server.cjs\n' > binary-viz-linux/start.sh
           chmod +x binary-viz-linux/start.sh binary-viz-linux/node
           tar -czf binary-viz-${{ steps.version.outputs.tag }}-linux-x64.tar.gz -C binary-viz-linux .
 
@@ -84,18 +101,11 @@ jobs:
           cp dist/server.cjs binary-viz-win/
           cp -r dist/public binary-viz-win/public
           cp node-win/node.exe binary-viz-win/node.exe
-          cat > binary-viz-win/start.bat << 'SCRIPT'
-          @echo off
-          cd /d "%~dp0"
-          set PORT=%PORT%
-          if "%PORT%"=="" set PORT=3000
-          echo Starting Binary Data Visualizer on http://localhost:%PORT%/
-          node.exe server.cjs
-          SCRIPT
+          printf '@echo off\r\ncd /d "%%~dp0"\r\nif "%%PORT%%"=="" set PORT=3000\r\necho Starting Binary Data Visualizer on http://localhost:%%PORT%%/\r\nnode.exe server.cjs\r\n' > binary-viz-win/start.bat
           cd binary-viz-win && zip -rq ../binary-viz-${{ steps.version.outputs.tag }}-win-x64.zip . && cd ..
 
       # Package lightweight build (requires Node.js on the machine)
-      - name: Package lightweight build
+      - name: Package portable build
         run: |
           mkdir -p binary-viz-light
           cp dist/server.cjs binary-viz-light/
