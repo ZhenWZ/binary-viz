@@ -42,27 +42,7 @@ jobs:
         run: npx vite build
 
       - name: Build standalone server
-        run: |
-          cat > /tmp/standalone.ts << 'SERVEREOF'
-          import express from "express";
-          import { createServer } from "http";
-          import path from "path";
-          async function startServer() {
-            const app = express();
-            const server = createServer(app);
-            const staticPath = path.resolve(__dirname, "public");
-            app.use(express.static(staticPath));
-            app.get("/{*splat}", (_req, res) => {
-              res.sendFile(path.join(staticPath, "index.html"));
-            });
-            const port = process.env.PORT || 3000;
-            server.listen(port, () => {
-              console.log(`Binary Data Visualizer running at http://localhost:${port}/`);
-            });
-          }
-          startServer().catch(console.error);
-          SERVEREOF
-          npx esbuild /tmp/standalone.ts --platform=node --bundle --format=cjs --outfile=dist/server.cjs
+        run: npx esbuild server/standalone.ts --platform=node --bundle --format=cjs --outfile=dist/server.cjs
 
       - name: Determine version
         id: version
