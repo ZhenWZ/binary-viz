@@ -5,13 +5,13 @@
  * Design: Dark Forge — side-by-side panels with diff highlighting
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   type DType,
   type ByteOrder,
   type FormatDetectionResult,
   type DecodedData,
-  autoDecodeBinary,
+  autoDecodeBinaryAsync,
   detectFormat,
   compareValues,
   parseTxtData,
@@ -100,48 +100,50 @@ export default function CompareMode() {
   const effectiveByteOrder = overrideByteOrder ?? autoDetectedByteOrder;
 
   // Decode/parse source A
-  const decodedA = useMemo<DecodedData | null>(() => {
+  const [decodedA, setDecodedA] = useState<DecodedData | null>(null);
+
+  useEffect(() => {
     if (sourceA.type === 'binary') {
-      if (!sourceA.buffer) return null;
-      try {
-        return autoDecodeBinary(
-          sourceA.buffer,
-          sourceA.fileName,
-          overrideDtype ?? undefined,
-          overrideByteOrder ?? undefined,
-          undefined,
-          selectedTensorA,
-        );
-      } catch { return null; }
+      if (!sourceA.buffer) { setDecodedA(null); return; }
+      let cancelled = false;
+      autoDecodeBinaryAsync(
+        sourceA.buffer, sourceA.fileName,
+        overrideDtype ?? undefined, overrideByteOrder ?? undefined,
+        undefined, selectedTensorA,
+      )
+        .then(result => { if (!cancelled) setDecodedA(result); })
+        .catch(() => { if (!cancelled) setDecodedA(null); });
+      return () => { cancelled = true; };
     } else {
       const text = sourceA.txtContent.trim();
-      if (!text) return null;
+      if (!text) { setDecodedA(null); return; }
       const values = parseTxtData(text);
-      if (values.length === 0) return null;
-      return txtToDecodedData(values, effectiveDtype);
+      if (values.length === 0) { setDecodedA(null); return; }
+      setDecodedA(txtToDecodedData(values, effectiveDtype));
     }
   }, [sourceA, overrideDtype, overrideByteOrder, effectiveDtype, selectedTensorA]);
 
   // Decode/parse source B
-  const decodedB = useMemo<DecodedData | null>(() => {
+  const [decodedB, setDecodedB] = useState<DecodedData | null>(null);
+
+  useEffect(() => {
     if (sourceB.type === 'binary') {
-      if (!sourceB.buffer) return null;
-      try {
-        return autoDecodeBinary(
-          sourceB.buffer,
-          sourceB.fileName,
-          overrideDtype ?? undefined,
-          overrideByteOrder ?? undefined,
-          undefined,
-          selectedTensorB,
-        );
-      } catch { return null; }
+      if (!sourceB.buffer) { setDecodedB(null); return; }
+      let cancelled = false;
+      autoDecodeBinaryAsync(
+        sourceB.buffer, sourceB.fileName,
+        overrideDtype ?? undefined, overrideByteOrder ?? undefined,
+        undefined, selectedTensorB,
+      )
+        .then(result => { if (!cancelled) setDecodedB(result); })
+        .catch(() => { if (!cancelled) setDecodedB(null); });
+      return () => { cancelled = true; };
     } else {
       const text = sourceB.txtContent.trim();
-      if (!text) return null;
+      if (!text) { setDecodedB(null); return; }
       const values = parseTxtData(text);
-      if (values.length === 0) return null;
-      return txtToDecodedData(values, effectiveDtype);
+      if (values.length === 0) { setDecodedB(null); return; }
+      setDecodedB(txtToDecodedData(values, effectiveDtype));
     }
   }, [sourceB, overrideDtype, overrideByteOrder, effectiveDtype, selectedTensorB]);
 
@@ -307,6 +309,11 @@ export default function CompareMode() {
                 totalElements={comparison.totalCompared}
                 diffIndices={comparison.diffIndices}
               />
+            )}
+            {(decodedA?.hasPrecisionLoss || decodedB?.hasPrecisionLoss) && (
+              <div className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs">
+                Some int64/uint64 values exceed 2&#x2075;&#xB3; and may have lost precision. Values beyond &#xB1;9,007,199,254,740,991 are approximate.
+              </div>
             )}
           </motion.div>
         )}
