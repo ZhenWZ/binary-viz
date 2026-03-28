@@ -10,6 +10,7 @@ interface DataTableProps {
   label?: string;
   onHoverIndex?: (index: number | null) => void;
   hoverIndex?: number | null;
+  onCellClick?: (index: number) => void;
   columns?: number;
   precision?: number;
 }
@@ -24,6 +25,7 @@ export default function DataTable({
   label,
   onHoverIndex,
   hoverIndex,
+  onCellClick,
   columns = 8,
   precision = 6,
 }: DataTableProps) {
@@ -225,11 +227,12 @@ export default function DataTable({
                     key={cell.index}
                     className={`
                       text-right text-[12px] font-mono px-2 py-1 border-b border-border/30
-                      transition-colors cursor-default
+                      transition-colors ${onCellClick ? 'cursor-pointer hover:ring-1 hover:ring-primary/30' : 'cursor-default'}
                       ${getHighlightClass(cell.index)}
                     `}
                     onMouseEnter={() => onHoverIndex?.(cell.index)}
                     onMouseLeave={() => onHoverIndex?.(null)}
+                    onClick={() => onCellClick?.(cell.index)}
                     title={`[${cell.index}] = ${cell.value}${showHex ? `\nHex: ${cell.hex}` : ''}`}
                   >
                     <span className="block leading-snug">{formatValue(cell.value, data.dtype, precision)}</span>
