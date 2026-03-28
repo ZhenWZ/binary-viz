@@ -293,6 +293,62 @@ describe('decodeBinary', () => {
     expect(result.values[2]).toBeCloseTo(0.5); // 2^-1
   });
 
+  // HiFloat8 (Ascend HiF8)
+  it('decodes hifloat8 zero (0x00)', () => {
+    const buf = new Uint8Array([0x00]).buffer;
+    const result = decodeBinary(buf, 'hifloat8');
+    expect(result.values[0]).toBe(0);
+  });
+
+  it('decodes hifloat8 NaN (0x80)', () => {
+    const buf = new Uint8Array([0x80]).buffer;
+    const result = decodeBinary(buf, 'hifloat8');
+    expect(Number.isNaN(result.values[0])).toBe(true);
+  });
+
+  it('decodes hifloat8 normal 1.0 (0x08)', () => {
+    // D=0 positive DML, exp=0, mant=0 → 2^0 × 1.0 = 1.0
+    const buf = new Uint8Array([0x08]).buffer;
+    const result = decodeBinary(buf, 'hifloat8');
+    expect(result.values[0]).toBe(1.0);
+  });
+
+  it('decodes hifloat8 negative value -1.0 (0x88)', () => {
+    const buf = new Uint8Array([0x88]).buffer;
+    const result = decodeBinary(buf, 'hifloat8');
+    expect(result.values[0]).toBe(-1.0);
+  });
+
+  it('decodes hifloat8 +Inf (0x6F)', () => {
+    // D=4, exp=+15, mant=1 → ±Inf
+    const buf = new Uint8Array([0x6F]).buffer;
+    const result = decodeBinary(buf, 'hifloat8');
+    expect(result.values[0]).toBe(Infinity);
+  });
+
+  it('decodes hifloat8 -Inf (0xEF)', () => {
+    const buf = new Uint8Array([0xEF]).buffer;
+    const result = decodeBinary(buf, 'hifloat8');
+    expect(result.values[0]).toBe(-Infinity);
+  });
+
+  it('decodes hifloat8 denormal 2^-16 (0x01)', () => {
+    // D=0 negative DML, mant=1 → 2^-(1+15) = 2^-16
+    const buf = new Uint8Array([0x01]).buffer;
+    const result = decodeBinary(buf, 'hifloat8');
+    expect(result.values[0]).toBeCloseTo(Math.pow(2, -16), 10);
+  });
+
+  it('decodes hifloat8 various normal values', () => {
+    // 0x10=2.0 (D=1, exp=+1, mant=0), 0x18=0.5 (D=1, exp=-1, mant=0)
+    const buf = new Uint8Array([0x10, 0x18, 0x40, 0x60]).buffer;
+    const result = decodeBinary(buf, 'hifloat8');
+    expect(result.values[0]).toBe(2.0);
+    expect(result.values[1]).toBe(0.5);
+    expect(result.values[2]).toBe(16.0);  // D=3, exp=+4, mant=0
+    expect(result.values[3]).toBe(256.0); // D=4, exp=+8, mant=0
+  });
+
   // Float16
   it('decodes float16 values', () => {
     // float16 1.0 = 0x3C00 (LE: 0x00, 0x3C)
