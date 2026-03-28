@@ -4,23 +4,32 @@
  * Persistent top toolbar with mode tabs, full-screen content area
  */
 
-import { useState } from 'react';
-import { Binary, GitCompareArrows, Info } from 'lucide-react';
+import { useState, useCallback } from 'react';
+import { Binary, GitCompareArrows, ToggleLeft, Info } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { motion } from 'framer-motion';
+import { type DType, type ByteOrder } from '@/lib/binaryDecoder';
 import DecodeMode from './DecodeMode';
 import CompareMode from './CompareMode';
+import BitCompareMode, { type BitCompareInit } from './BitCompareMode';
 
-type Mode = 'decode' | 'compare';
+type Mode = 'decode' | 'compare' | 'bitcompare';
 
 const MODES = [
   { id: 'decode' as Mode, label: 'Decode', icon: Binary, description: 'Auto-detect and decode binary files' },
   { id: 'compare' as Mode, label: 'Compare', icon: GitCompareArrows, description: 'Compare binary or text sources side-by-side' },
+  { id: 'bitcompare' as Mode, label: 'Bit Compare', icon: ToggleLeft, description: 'Compare numbers bit by bit across dtypes' },
 ];
 
 export default function Home() {
   const [mode, setMode] = useState<Mode>('decode');
+  const [bitCompareInit, setBitCompareInit] = useState<BitCompareInit | null>(null);
+
+  const handleBitCompare = useCallback((entries: { value: number; bytes: Uint8Array }[], dtype: DType, byteOrder: ByteOrder) => {
+    setBitCompareInit({ entries, dtype, byteOrder });
+    setMode('bitcompare');
+  }, []);
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
@@ -74,7 +83,7 @@ export default function Home() {
                 <p>NumPy .npy, PyTorch .pt/.ptx, Safetensors, raw binary</p>
                 <p>Text: .txt, .csv, .log with numeric values</p>
                 <p className="mt-1 font-semibold">Supported dtypes:</p>
-                <p>float8 (E4M3, E5M2, E8M0), float16, bfloat16, float32, float64</p>
+                <p>float8 (E4M3, E5M2, E8M0, HiFloat8), float16, bfloat16, float32, float64</p>
                 <p>int8/16/32/64, uint8/16/32/64, bool</p>
                 <p className="mt-1 font-semibold">Auto-detection:</p>
                 <p>Format and dtype are automatically detected for .npy, .pt, .ptx, and .safetensors files</p>
@@ -95,7 +104,13 @@ export default function Home() {
             className="h-full"
           >
             {mode === 'decode' && <DecodeMode />}
-            {mode === 'compare' && <CompareMode />}
+            {mode === 'compare' && <CompareMode onBitCompare={handleBitCompare} />}
+            {mode === 'bitcompare' && (
+              <BitCompareMode
+                init={bitCompareInit}
+                onInitConsumed={() => setBitCompareInit(null)}
+              />
+            )}
           </motion.div>
         </div>
       </main>

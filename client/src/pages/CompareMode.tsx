@@ -18,6 +18,7 @@ import {
   DTYPE_INFO,
   formatValue,
 } from '@/lib/binaryDecoder';
+import { valueToBytes } from '@/lib/bitUtils';
 import FileDropZone from '@/components/FileDropZone';
 import DTypeSelector from '@/components/DTypeSelector';
 import DataTable from '@/components/DataTable';
@@ -67,7 +68,11 @@ function txtToDecodedData(values: number[], dtype: DType): DecodedData {
   };
 }
 
-export default function CompareMode() {
+interface CompareModeProps {
+  onBitCompare?: (entries: { value: number; bytes: Uint8Array }[], dtype: DType, byteOrder: ByteOrder) => void;
+}
+
+export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
   const [sourceA, setSourceA] = useState<SourceState>(initialSource());
   const [sourceB, setSourceB] = useState<SourceState>(initialSource());
 
@@ -152,6 +157,28 @@ export default function CompareMode() {
     if (!decodedA || !decodedB) return null;
     return compareValues(decodedA.values, decodedB.values, tolerance);
   }, [decodedA, decodedB, tolerance]);
+
+  // Bit compare handler — extract bytes for both sources at a given index
+  const handleCellBitCompare = useCallback((index: number) => {
+    if (!onBitCompare || !decodedA || !decodedB) return;
+    if (index >= decodedA.elementCount || index >= decodedB.elementCount) return;
+
+    const bpe = DTYPE_INFO[effectiveDtype].bytes;
+    const extractBytes = (data: DecodedData, idx: number): Uint8Array => {
+      if (data.rawBytes.length > 0) {
+        const start = (data.dataOffset ?? 0) + idx * bpe;
+        return new Uint8Array(data.rawBytes.slice(start, start + bpe));
+      }
+      // Text source — no raw bytes, re-encode from value
+      return valueToBytes(data.values[idx], effectiveDtype, effectiveByteOrder);
+    };
+
+    const entries = [
+      { value: decodedA.values[index], bytes: extractBytes(decodedA, index) },
+      { value: decodedB.values[index], bytes: extractBytes(decodedB, index) },
+    ];
+    onBitCompare(entries, effectiveDtype, effectiveByteOrder);
+  }, [onBitCompare, decodedA, decodedB, effectiveDtype, effectiveByteOrder]);
 
   // Handlers
   const handleBinFileA = useCallback((buf: ArrayBuffer, name: string) => {
@@ -354,6 +381,7 @@ export default function CompareMode() {
               label={`A: ${sourceA.type === 'binary' ? sourceA.fileName : (sourceA.txtFileName || 'Text')}`}
               onHoverIndex={setHoverIndex}
               hoverIndex={hoverIndex}
+              onCellClick={onBitCompare ? handleCellBitCompare : undefined}
             />
           </motion.div>
           <motion.div
@@ -371,6 +399,7 @@ export default function CompareMode() {
               label={`B: ${sourceB.type === 'binary' ? sourceB.fileName : (sourceB.txtFileName || 'Text')}`}
               onHoverIndex={setHoverIndex}
               hoverIndex={hoverIndex}
+              onCellClick={onBitCompare ? handleCellBitCompare : undefined}
             />
           </motion.div>
         </div>
