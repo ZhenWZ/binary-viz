@@ -11,6 +11,7 @@ export type DType =
   | 'float8_e4m3'
   | 'float8_e5m2'
   | 'float8_e8m0'
+  | 'hifloat8'
   | 'float16'
   | 'bfloat16'
   | 'float32'
@@ -40,6 +41,7 @@ export const DTYPE_INFO: Record<DType, DTypeInfo> = {
   float8_e4m3: { name: 'float8_e4m3', bytes: 1, description: 'FP8 E4M3 (OCP)', category: 'float' },
   float8_e5m2: { name: 'float8_e5m2', bytes: 1, description: 'FP8 E5M2 (OCP)', category: 'float' },
   float8_e8m0: { name: 'float8_e8m0', bytes: 1, description: 'FP8 E8M0 (MX scale)', category: 'float' },
+  hifloat8: { name: 'hifloat8', bytes: 1, description: 'HiFloat8 (Ascend)', category: 'float' },
   float16: { name: 'float16', bytes: 2, description: 'IEEE 754 half-precision', category: 'float' },
   bfloat16: { name: 'bfloat16', bytes: 2, description: 'Brain floating point', category: 'float' },
   float32: { name: 'float32', bytes: 4, description: 'IEEE 754 single-precision', category: 'float' },
@@ -56,7 +58,7 @@ export const DTYPE_INFO: Record<DType, DTypeInfo> = {
 };
 
 export const DTYPE_GROUPS: Record<string, DType[]> = {
-  'FP8': ['float8_e4m3', 'float8_e5m2', 'float8_e8m0'],
+  'FP8': ['float8_e4m3', 'float8_e5m2', 'float8_e8m0', 'hifloat8'],
   'Floating Point': ['float16', 'bfloat16', 'float32', 'float64'],
   'Signed Integer': ['int8', 'int16', 'int32', 'int64'],
   'Unsigned Integer': ['uint8', 'uint16', 'uint32', 'uint64'],
@@ -117,6 +119,52 @@ function decodeFloat8E5M2(byte: number): number {
 function decodeFloat8E8M0(byte: number): number {
   if (byte === 255) return NaN;
   return Math.pow(2, byte - 127);
+}
+
+/**
+ * Decode HiFloat8 (Huawei Ascend HiF8) — tapered precision 8-bit float.
+ * Uses a precomputed 256-entry lookup table derived from arXiv:2409.16626.
+ * Format: 1 sign + 2-4 dot + 0-4 exponent (sign-magnitude) + 1-3 mantissa.
+ * Covers 38 binades of dynamic range with variable precision.
+ */
+// prettier-ignore
+const HIF8_LUT: number[] = [
+  0, 1.52587890625e-05, 7.62939453125e-06, 3.814697265625e-06, 1.9073486328125e-06, 9.5367431640625e-07, 4.76837158203125e-07, 2.384185791015625e-07,
+  1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75, 1.875,
+  2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75,
+  0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375,
+  4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5,
+  8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
+  0.25, 0.28125, 0.3125, 0.34375, 0.375, 0.40625, 0.4375, 0.46875,
+  0.125, 0.140625, 0.15625, 0.171875, 0.1875, 0.203125, 0.21875, 0.234375,
+  16.0, 20.0, 24.0, 28.0, 32.0, 40.0, 48.0, 56.0,
+  64.0, 80.0, 96.0, 112.0, 128.0, 160.0, 192.0, 224.0,
+  0.0625, 0.078125, 0.09375, 0.109375, 0.03125, 0.0390625, 0.046875, 0.0546875,
+  0.015625, 0.01953125, 0.0234375, 0.02734375, 0.0078125, 0.009765625, 0.01171875, 0.013671875,
+  256.0, 384.0, 512.0, 768.0, 1024.0, 1536.0, 2048.0, 3072.0,
+  4096.0, 6144.0, 8192.0, 12288.0, 16384.0, 24576.0, 32768.0, Infinity,
+  0.00390625, 0.005859375, 0.001953125, 0.0029296875, 0.0009765625, 0.00146484375, 0.00048828125, 0.000732421875,
+  0.000244140625, 0.0003662109375, 0.0001220703125, 0.00018310546875, 6.103515625e-05, 9.1552734375e-05, 3.0517578125e-05, 4.57763671875e-05,
+  NaN, -1.52587890625e-05, -7.62939453125e-06, -3.814697265625e-06, -1.9073486328125e-06, -9.5367431640625e-07, -4.76837158203125e-07, -2.384185791015625e-07,
+  -1.0, -1.125, -1.25, -1.375, -1.5, -1.625, -1.75, -1.875,
+  -2.0, -2.25, -2.5, -2.75, -3.0, -3.25, -3.5, -3.75,
+  -0.5, -0.5625, -0.625, -0.6875, -0.75, -0.8125, -0.875, -0.9375,
+  -4.0, -4.5, -5.0, -5.5, -6.0, -6.5, -7.0, -7.5,
+  -8.0, -9.0, -10.0, -11.0, -12.0, -13.0, -14.0, -15.0,
+  -0.25, -0.28125, -0.3125, -0.34375, -0.375, -0.40625, -0.4375, -0.46875,
+  -0.125, -0.140625, -0.15625, -0.171875, -0.1875, -0.203125, -0.21875, -0.234375,
+  -16.0, -20.0, -24.0, -28.0, -32.0, -40.0, -48.0, -56.0,
+  -64.0, -80.0, -96.0, -112.0, -128.0, -160.0, -192.0, -224.0,
+  -0.0625, -0.078125, -0.09375, -0.109375, -0.03125, -0.0390625, -0.046875, -0.0546875,
+  -0.015625, -0.01953125, -0.0234375, -0.02734375, -0.0078125, -0.009765625, -0.01171875, -0.013671875,
+  -256.0, -384.0, -512.0, -768.0, -1024.0, -1536.0, -2048.0, -3072.0,
+  -4096.0, -6144.0, -8192.0, -12288.0, -16384.0, -24576.0, -32768.0, -Infinity,
+  -0.00390625, -0.005859375, -0.001953125, -0.0029296875, -0.0009765625, -0.00146484375, -0.00048828125, -0.000732421875,
+  -0.000244140625, -0.0003662109375, -0.0001220703125, -0.00018310546875, -6.103515625e-05, -9.1552734375e-05, -3.0517578125e-05, -4.57763671875e-05,
+];
+
+function decodeHiFloat8(byte: number): number {
+  return HIF8_LUT[byte & 0xFF];
 }
 
 // ─── Float16/BFloat16 Decoders ───────────────────────────────────────────────
@@ -613,6 +661,9 @@ export function decodeBinary(
         break;
       case 'float8_e8m0':
         value = decodeFloat8E8M0(bytes[pos]);
+        break;
+      case 'hifloat8':
+        value = decodeHiFloat8(bytes[pos]);
         break;
       case 'float16':
         value = decodeFloat16(bytes[pos], bytes[pos + 1], littleEndian);

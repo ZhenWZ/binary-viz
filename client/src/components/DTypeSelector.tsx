@@ -88,6 +88,11 @@ export default function DTypeSelector({
                       <span className="text-muted-foreground ml-2 text-xs">
                         ({DTYPE_INFO[t].bytes}B)
                       </span>
+                      {t === 'hifloat8' && (
+                        <span className="ml-1.5 px-1 py-0.5 text-[9px] font-semibold uppercase rounded bg-amber-500/15 text-amber-400 border border-amber-500/20">
+                          beta
+                        </span>
+                      )}
                     </SelectItem>
                   ))}
                 </div>
