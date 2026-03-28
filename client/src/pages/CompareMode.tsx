@@ -5,7 +5,7 @@
  * Design: Dark Forge — side-by-side panels with diff highlighting
  */
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   type DType,
   type ByteOrder,
@@ -19,12 +19,14 @@ import {
   formatValue,
 } from '@/lib/binaryDecoder';
 import { valueToBytes } from '@/lib/bitUtils';
+import { addHistoryEntry } from '@/lib/history';
 import FileDropZone from '@/components/FileDropZone';
 import DTypeSelector from '@/components/DTypeSelector';
 import DataTable from '@/components/DataTable';
 import StatsPanel from '@/components/StatsPanel';
 import DiffSummaryBar from '@/components/DiffSummaryBar';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
@@ -79,11 +81,18 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
   // Shared decode settings (user can override auto-detected)
   const [overrideDtype, setOverrideDtype] = useState<DType | null>(null);
   const [overrideByteOrder, setOverrideByteOrder] = useState<ByteOrder | null>(null);
+  const [independentDtype, setIndependentDtype] = useState(false);
+  const [overrideDtypeA, setOverrideDtypeA] = useState<DType | null>(null);
+  const [overrideDtypeB, setOverrideDtypeB] = useState<DType | null>(null);
   const [showHex, setShowHex] = useState(false);
   const [columns, setColumns] = useState(8);
   const [tolerance, setTolerance] = useState(0);
   const [precision, setPrecision] = useState(6);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [syncScroll, setSyncScroll] = useState(true);
+  const [sharedPage, setSharedPage] = useState(0);
+  const [sharedScrollTop, setSharedScrollTop] = useState(0);
+  const scrollSourceRef = useRef<'A' | 'B' | null>(null);
   const [selectedTensorA, setSelectedTensorA] = useState(0);
   const [selectedTensorB, setSelectedTensorB] = useState(0);
 
@@ -104,6 +113,14 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
   const effectiveDtype = overrideDtype ?? autoDetectedDtype;
   const effectiveByteOrder = overrideByteOrder ?? autoDetectedByteOrder;
 
+  // Per-source effective dtypes (when independent mode is on)
+  const effectiveDtypeA = independentDtype
+    ? (overrideDtypeA ?? formatInfoA?.dtype ?? 'float32')
+    : effectiveDtype;
+  const effectiveDtypeB = independentDtype
+    ? (overrideDtypeB ?? formatInfoB?.dtype ?? 'float32')
+    : effectiveDtype;
+
   // Decode/parse source A
   const [decodedA, setDecodedA] = useState<DecodedData | null>(null);
 
@@ -111,9 +128,10 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
     if (sourceA.type === 'binary') {
       if (!sourceA.buffer) { setDecodedA(null); return; }
       let cancelled = false;
+      const dtypeOverride = independentDtype ? (overrideDtypeA ?? undefined) : (overrideDtype ?? undefined);
       autoDecodeBinaryAsync(
         sourceA.buffer, sourceA.fileName,
-        overrideDtype ?? undefined, overrideByteOrder ?? undefined,
+        dtypeOverride, overrideByteOrder ?? undefined,
         undefined, selectedTensorA,
       )
         .then(result => { if (!cancelled) setDecodedA(result); })
@@ -124,9 +142,9 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
       if (!text) { setDecodedA(null); return; }
       const values = parseTxtData(text);
       if (values.length === 0) { setDecodedA(null); return; }
-      setDecodedA(txtToDecodedData(values, effectiveDtype));
+      setDecodedA(txtToDecodedData(values, effectiveDtypeA));
     }
-  }, [sourceA, overrideDtype, overrideByteOrder, effectiveDtype, selectedTensorA]);
+  }, [sourceA, overrideDtype, overrideDtypeA, independentDtype, overrideByteOrder, effectiveDtypeA, selectedTensorA]);
 
   // Decode/parse source B
   const [decodedB, setDecodedB] = useState<DecodedData | null>(null);
@@ -135,9 +153,10 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
     if (sourceB.type === 'binary') {
       if (!sourceB.buffer) { setDecodedB(null); return; }
       let cancelled = false;
+      const dtypeOverride = independentDtype ? (overrideDtypeB ?? undefined) : (overrideDtype ?? undefined);
       autoDecodeBinaryAsync(
         sourceB.buffer, sourceB.fileName,
-        overrideDtype ?? undefined, overrideByteOrder ?? undefined,
+        dtypeOverride, overrideByteOrder ?? undefined,
         undefined, selectedTensorB,
       )
         .then(result => { if (!cancelled) setDecodedB(result); })
@@ -148,9 +167,9 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
       if (!text) { setDecodedB(null); return; }
       const values = parseTxtData(text);
       if (values.length === 0) { setDecodedB(null); return; }
-      setDecodedB(txtToDecodedData(values, effectiveDtype));
+      setDecodedB(txtToDecodedData(values, effectiveDtypeB));
     }
-  }, [sourceB, overrideDtype, overrideByteOrder, effectiveDtype, selectedTensorB]);
+  }, [sourceB, overrideDtype, overrideDtypeB, independentDtype, overrideByteOrder, effectiveDtypeB, selectedTensorB]);
 
   // Compare
   const comparison = useMemo(() => {
@@ -158,42 +177,79 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
     return compareValues(decodedA.values, decodedB.values, tolerance);
   }, [decodedA, decodedB, tolerance]);
 
+  // Record compare to history
+  const lastHistoryRef = useRef<string>('');
+  useEffect(() => {
+    if (!comparison || !decodedA || !decodedB) return;
+    const key = `${sourceA.fileName}:${sourceB.fileName}:${decodedA.elementCount}:${decodedB.elementCount}`;
+    if (key === lastHistoryRef.current) return; // avoid duplicate records for same pair
+    lastHistoryRef.current = key;
+    addHistoryEntry({
+      mode: 'compare',
+      fileNameA: sourceA.fileName || sourceA.txtFileName || 'Text',
+      fileNameB: sourceB.fileName || sourceB.txtFileName || 'Text',
+      dtype: effectiveDtypeA,
+      elementCount: comparison.totalCompared,
+      diffCount: comparison.diffCount,
+    });
+  }, [comparison, decodedA, decodedB, sourceA, sourceB, effectiveDtypeA]);
+
   // Bit compare handler — extract bytes for both sources at a given index
+  // Disabled when independent dtypes differ (comparing bits across dtypes is meaningless)
+  const canBitCompare = onBitCompare && effectiveDtypeA === effectiveDtypeB;
   const handleCellBitCompare = useCallback((index: number) => {
     if (!onBitCompare || !decodedA || !decodedB) return;
+    if (effectiveDtypeA !== effectiveDtypeB) return;
     if (index >= decodedA.elementCount || index >= decodedB.elementCount) return;
 
-    const bpe = DTYPE_INFO[effectiveDtype].bytes;
+    const dtype = effectiveDtypeA;
+    const bpe = DTYPE_INFO[dtype].bytes;
     const extractBytes = (data: DecodedData, idx: number): Uint8Array => {
       if (data.rawBytes.length > 0) {
         const start = (data.dataOffset ?? 0) + idx * bpe;
         return new Uint8Array(data.rawBytes.slice(start, start + bpe));
       }
-      // Text source — no raw bytes, re-encode from value
-      return valueToBytes(data.values[idx], effectiveDtype, effectiveByteOrder);
+      return valueToBytes(data.values[idx], dtype, effectiveByteOrder);
     };
 
     const entries = [
       { value: decodedA.values[index], bytes: extractBytes(decodedA, index) },
       { value: decodedB.values[index], bytes: extractBytes(decodedB, index) },
     ];
-    onBitCompare(entries, effectiveDtype, effectiveByteOrder);
-  }, [onBitCompare, decodedA, decodedB, effectiveDtype, effectiveByteOrder]);
+    onBitCompare(entries, dtype, effectiveByteOrder);
+  }, [onBitCompare, decodedA, decodedB, effectiveDtypeA, effectiveDtypeB, effectiveByteOrder]);
+
+  // Scroll sync handlers
+  const handleScrollA = useCallback((scrollTop: number) => {
+    if (syncScroll && scrollSourceRef.current !== 'B') {
+      scrollSourceRef.current = 'A';
+      setSharedScrollTop(scrollTop);
+      requestAnimationFrame(() => { scrollSourceRef.current = null; });
+    }
+  }, [syncScroll]);
+
+  const handleScrollB = useCallback((scrollTop: number) => {
+    if (syncScroll && scrollSourceRef.current !== 'A') {
+      scrollSourceRef.current = 'B';
+      setSharedScrollTop(scrollTop);
+      requestAnimationFrame(() => { scrollSourceRef.current = null; });
+    }
+  }, [syncScroll]);
 
   // Handlers
   const handleBinFileA = useCallback((buf: ArrayBuffer, name: string) => {
     setSourceA(prev => ({ ...prev, buffer: buf, fileName: name }));
     setSelectedTensorA(0);
-    // Reset overrides so auto-detection kicks in
     setOverrideDtype(null);
+    setOverrideDtypeA(null);
     setOverrideByteOrder(null);
   }, []);
 
   const handleBinFileB = useCallback((buf: ArrayBuffer, name: string) => {
     setSourceB(prev => ({ ...prev, buffer: buf, fileName: name }));
     setSelectedTensorB(0);
-    // Reset overrides so auto-detection kicks in for the new file
     setOverrideDtype(null);
+    setOverrideDtypeB(null);
     setOverrideByteOrder(null);
   }, []);
 
@@ -268,21 +324,63 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
             exit={{ opacity: 0, y: -10 }}
             className="shrink-0 flex flex-wrap items-end gap-4"
           >
-            <DTypeSelector
-              dtype={effectiveDtype}
-              byteOrder={effectiveByteOrder}
-              onDTypeChange={(d) => setOverrideDtype(d)}
-              onByteOrderChange={(o) => setOverrideByteOrder(o)}
-              showHex={showHex}
-              onShowHexChange={setShowHex}
-              columns={columns}
-              onColumnsChange={setColumns}
-              precision={precision}
-              onPrecisionChange={setPrecision}
-              formatInfo={primaryFormatInfo}
-              autoDetected={!overrideDtype && primaryFormatInfo?.confidence !== 'low'}
-              compact
-            />
+            {!independentDtype ? (
+              <DTypeSelector
+                dtype={effectiveDtype}
+                byteOrder={effectiveByteOrder}
+                onDTypeChange={(d) => setOverrideDtype(d)}
+                onByteOrderChange={(o) => setOverrideByteOrder(o)}
+                showHex={showHex}
+                onShowHexChange={setShowHex}
+                columns={columns}
+                onColumnsChange={setColumns}
+                precision={precision}
+                onPrecisionChange={setPrecision}
+                formatInfo={primaryFormatInfo}
+                autoDetected={!overrideDtype && primaryFormatInfo?.confidence !== 'low'}
+                compact
+              />
+            ) : (
+              <div className="space-y-2 w-full">
+                <div className="flex flex-wrap items-end gap-4">
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground uppercase tracking-wider">Dtype A</Label>
+                    <DTypeSelector
+                      dtype={effectiveDtypeA}
+                      byteOrder={effectiveByteOrder}
+                      onDTypeChange={(d) => setOverrideDtypeA(d)}
+                      onByteOrderChange={(o) => setOverrideByteOrder(o)}
+                      showHex={showHex}
+                      onShowHexChange={setShowHex}
+                      columns={columns}
+                      onColumnsChange={setColumns}
+                      precision={precision}
+                      onPrecisionChange={setPrecision}
+                      formatInfo={formatInfoA}
+                      autoDetected={!overrideDtypeA && formatInfoA?.confidence !== 'low'}
+                      compact
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground uppercase tracking-wider">Dtype B</Label>
+                    <DTypeSelector
+                      dtype={effectiveDtypeB}
+                      byteOrder={effectiveByteOrder}
+                      onDTypeChange={(d) => setOverrideDtypeB(d)}
+                      onByteOrderChange={(o) => setOverrideByteOrder(o)}
+                      formatInfo={formatInfoB}
+                      autoDetected={!overrideDtypeB && formatInfoB?.confidence !== 'low'}
+                      compact
+                    />
+                  </div>
+                </div>
+                {effectiveDtypeA !== effectiveDtypeB && (
+                  <div className="px-3 py-1.5 rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[11px]">
+                    Different dtypes selected — comparison operates on decoded numeric values. Value ranges may differ.
+                  </div>
+                )}
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Tolerance</Label>
               <input
@@ -294,6 +392,22 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
                 className="h-9 w-[110px] rounded-md border border-border bg-secondary/50 px-3 text-sm font-mono text-foreground outline-none focus:ring-1 focus:ring-ring"
                 placeholder="0"
               />
+            </div>
+            <div className="flex items-center gap-2 pb-0.5">
+              <Switch
+                checked={syncScroll}
+                onCheckedChange={setSyncScroll}
+                className="data-[state=checked]:bg-primary"
+              />
+              <Label className="text-xs text-muted-foreground">Sync scroll</Label>
+            </div>
+            <div className="flex items-center gap-2 pb-0.5">
+              <Switch
+                checked={independentDtype}
+                onCheckedChange={setIndependentDtype}
+                className="data-[state=checked]:bg-primary"
+              />
+              <Label className="text-xs text-muted-foreground">Independent dtypes</Label>
             </div>
           </motion.div>
         )}
@@ -381,7 +495,11 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
               label={`A: ${sourceA.type === 'binary' ? sourceA.fileName : (sourceA.txtFileName || 'Text')}`}
               onHoverIndex={setHoverIndex}
               hoverIndex={hoverIndex}
-              onCellClick={onBitCompare ? handleCellBitCompare : undefined}
+              onCellClick={canBitCompare ? handleCellBitCompare : undefined}
+              page={syncScroll ? sharedPage : undefined}
+              onPageChange={syncScroll ? setSharedPage : undefined}
+              onScrollSync={syncScroll ? handleScrollA : undefined}
+              externalScrollTop={syncScroll && scrollSourceRef.current !== 'A' ? sharedScrollTop : undefined}
             />
           </motion.div>
           <motion.div
@@ -399,7 +517,11 @@ export default function CompareMode({ onBitCompare }: CompareModeProps = {}) {
               label={`B: ${sourceB.type === 'binary' ? sourceB.fileName : (sourceB.txtFileName || 'Text')}`}
               onHoverIndex={setHoverIndex}
               hoverIndex={hoverIndex}
-              onCellClick={onBitCompare ? handleCellBitCompare : undefined}
+              onCellClick={canBitCompare ? handleCellBitCompare : undefined}
+              page={syncScroll ? sharedPage : undefined}
+              onPageChange={syncScroll ? setSharedPage : undefined}
+              onScrollSync={syncScroll ? handleScrollB : undefined}
+              externalScrollTop={syncScroll && scrollSourceRef.current !== 'B' ? sharedScrollTop : undefined}
             />
           </motion.div>
         </div>

@@ -13,6 +13,7 @@ import {
   autoDecodeBinaryAsync,
   detectFormat,
 } from '@/lib/binaryDecoder';
+import { addHistoryEntry } from '@/lib/history';
 import FileDropZone from '@/components/FileDropZone';
 import DTypeSelector from '@/components/DTypeSelector';
 import DataTable from '@/components/DataTable';
@@ -81,7 +82,20 @@ export default function DecodeMode() {
       overrideOffset ?? undefined,
       selectedTensor,
     )
-      .then(result => { if (!cancelled) setDecoded(result); })
+      .then(result => {
+        if (!cancelled) {
+          setDecoded(result);
+          if (result && result.elementCount > 0) {
+            addHistoryEntry({
+              mode: 'decode',
+              fileName,
+              fileSize: buffer.byteLength,
+              dtype: result.dtype,
+              elementCount: result.elementCount,
+            });
+          }
+        }
+      })
       .catch(e => { console.error('Decode error:', e); if (!cancelled) setDecoded(null); });
     return () => { cancelled = true; };
   }, [buffer, fileName, overrideDtype, overrideByteOrder, overrideOffset, selectedTensor]);

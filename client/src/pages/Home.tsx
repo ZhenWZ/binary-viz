@@ -8,8 +8,9 @@ import { useState, useCallback } from 'react';
 import { Binary, GitCompareArrows, ToggleLeft, Info } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { motion } from 'framer-motion';
+
 import { type DType, type ByteOrder } from '@/lib/binaryDecoder';
+import HistoryPanel from '@/components/HistoryPanel';
 import DecodeMode from './DecodeMode';
 import CompareMode from './CompareMode';
 import BitCompareMode, { type BitCompareInit } from './BitCompareMode';
@@ -72,6 +73,7 @@ export default function Home() {
             <span className="text-[11px] text-muted-foreground hidden md:block">
               {MODES.find((m) => m.id === mode)?.description}
             </span>
+            <HistoryPanel onNavigate={(m) => setMode(m)} />
             <Tooltip>
               <TooltipTrigger asChild>
                 <button className="p-1.5 rounded-md hover:bg-accent transition-colors">
@@ -93,25 +95,21 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* Main Content — all modes stay mounted to preserve state */}
       <main className="flex-1 min-h-0 overflow-hidden">
         <div className="h-full p-4 lg:p-5">
-          <motion.div
-            key={mode}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.15 }}
-            className="h-full"
-          >
-            {mode === 'decode' && <DecodeMode />}
-            {mode === 'compare' && <CompareMode onBitCompare={handleBitCompare} />}
-            {mode === 'bitcompare' && (
-              <BitCompareMode
-                init={bitCompareInit}
-                onInitConsumed={() => setBitCompareInit(null)}
-              />
-            )}
-          </motion.div>
+          <div className="h-full" style={{ display: mode === 'decode' ? 'block' : 'none' }}>
+            <DecodeMode />
+          </div>
+          <div className="h-full" style={{ display: mode === 'compare' ? 'block' : 'none' }}>
+            <CompareMode onBitCompare={handleBitCompare} />
+          </div>
+          <div className="h-full" style={{ display: mode === 'bitcompare' ? 'block' : 'none' }}>
+            <BitCompareMode
+              init={bitCompareInit}
+              onInitConsumed={() => setBitCompareInit(null)}
+            />
+          </div>
         </div>
       </main>
     </div>
