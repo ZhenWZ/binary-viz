@@ -349,6 +349,133 @@ describe('decodeBinary', () => {
     expect(result.values[3]).toBe(256.0); // D=4, exp=+8, mant=0
   });
 
+  // HiFloat8 — sign symmetry
+  it('hifloat8 sign symmetry: LUT[b] == -LUT[b|0x80] for all non-special bytes', () => {
+    // For bytes 1-127 (skip 0x00=zero and 0x80=NaN), the negative half should mirror
+    for (let b = 1; b < 128; b++) {
+      const pos = decodeBinary(new Uint8Array([b]).buffer, 'hifloat8').values[0];
+      const neg = decodeBinary(new Uint8Array([b | 0x80]).buffer, 'hifloat8').values[0];
+      if (Number.isNaN(pos)) {
+        expect(Number.isNaN(neg)).toBe(true);
+      } else {
+        expect(neg).toBe(-pos);
+      }
+    }
+  });
+
+  // HiFloat8 — all 7 denormal values (D=0 negative DML)
+  it('hifloat8 decodes all denormal values (bytes 0x01-0x07)', () => {
+    const expected = [
+      Math.pow(2, -16), // 0x01: mant=1, 2^-(1+15)
+      Math.pow(2, -17), // 0x02: mant=2, 2^-(2+15)
+      Math.pow(2, -18), // 0x03: mant=3
+      Math.pow(2, -19), // 0x04: mant=4
+      Math.pow(2, -20), // 0x05: mant=5
+      Math.pow(2, -21), // 0x06: mant=6
+      Math.pow(2, -22), // 0x07: mant=7, smallest positive value
+    ];
+    for (let i = 0; i < 7; i++) {
+      const result = decodeBinary(new Uint8Array([i + 1]).buffer, 'hifloat8');
+      expect(result.values[0]).toBeCloseTo(expected[i], 15);
+    }
+  });
+
+  // HiFloat8 — D=0 positive DML (exp=0, bytes 0x08-0x0F)
+  it('hifloat8 decodes all D=0 positive DML values (bytes 0x08-0x0F)', () => {
+    // exp=0 → 2^0 = 1, mantissa 3-bit: value = 1 + mant/8
+    const expected = [1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75, 1.875];
+    const buf = new Uint8Array([0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F]).buffer;
+    const result = decodeBinary(buf, 'hifloat8');
+    for (let i = 0; i < 8; i++) {
+      expect(result.values[i]).toBe(expected[i]);
+    }
+  });
+
+  // HiFloat8 — D=1 region (exp=±1, 3-bit mantissa, bytes 0x10-0x1F)
+  it('hifloat8 decodes D=1 boundary values', () => {
+    // 0x10: D=1, exp_sign=0, exp=+1, mant=0 → 2^1 × 1.0 = 2.0
+    expect(decodeBinary(new Uint8Array([0x10]).buffer, 'hifloat8').values[0]).toBe(2.0);
+    // 0x17: D=1, exp_sign=0, exp=+1, mant=7 → 2^1 × (1+7/8) = 3.75
+    expect(decodeBinary(new Uint8Array([0x17]).buffer, 'hifloat8').values[0]).toBe(3.75);
+    // 0x18: D=1, exp_sign=1, exp=-1, mant=0 → 2^-1 × 1.0 = 0.5
+    expect(decodeBinary(new Uint8Array([0x18]).buffer, 'hifloat8').values[0]).toBe(0.5);
+    // 0x1F: D=1, exp_sign=1, exp=-1, mant=7 → 2^-1 × (1+7/8) = 0.9375
+    expect(decodeBinary(new Uint8Array([0x1F]).buffer, 'hifloat8').values[0]).toBe(0.9375);
+  });
+
+  // HiFloat8 — D=2 region (exp=±2,±3, 3-bit mantissa, bytes 0x20-0x3F)
+  it('hifloat8 decodes D=2 boundary values', () => {
+    // 0x20: D=2, exp_sign=0, exp_stored=0 → exp_mag=(1<<1)|0=2, exp=+2, mant=0 → 4.0
+    expect(decodeBinary(new Uint8Array([0x20]).buffer, 'hifloat8').values[0]).toBe(4.0);
+    // 0x2F: D=2, exp_sign=0, exp_stored=1 → exp=+3, mant=7 → 8×(1+7/8)=15.0
+    expect(decodeBinary(new Uint8Array([0x2F]).buffer, 'hifloat8').values[0]).toBe(15.0);
+    // 0x30: D=2, exp_sign=1, exp_stored=0 → exp=-2, mant=0 → 0.25
+    expect(decodeBinary(new Uint8Array([0x30]).buffer, 'hifloat8').values[0]).toBe(0.25);
+    // 0x3F: D=2, exp_sign=1, exp_stored=1 → exp=-3, mant=7 → (1/8)×(1+7/8)=0.234375
+    expect(decodeBinary(new Uint8Array([0x3F]).buffer, 'hifloat8').values[0]).toBe(0.234375);
+  });
+
+  // HiFloat8 — D=3 region (exp=±4..±7, 2-bit mantissa, bytes 0x40-0x5F)
+  it('hifloat8 decodes D=3 boundary values', () => {
+    // 0x40: D=3, exp_sign=0, exp_stored=00 → exp_mag=(1<<2)|0=4, exp=+4, mant=0 → 16.0
+    expect(decodeBinary(new Uint8Array([0x40]).buffer, 'hifloat8').values[0]).toBe(16.0);
+    // 0x4F: D=3, exp_sign=0, exp_stored=11 → exp=+7, mant=3 → 128×(1+3/4)=224.0
+    expect(decodeBinary(new Uint8Array([0x4F]).buffer, 'hifloat8').values[0]).toBe(224.0);
+    // 0x50: D=3, exp_sign=1, exp_stored=00 → exp=-4, mant=0 → 0.0625
+    expect(decodeBinary(new Uint8Array([0x50]).buffer, 'hifloat8').values[0]).toBe(0.0625);
+    // 0x5F: D=3, exp_sign=1, exp_stored=11 → exp=-7, mant=3 → (1/128)×(1+3/4)=0.013671875
+    expect(decodeBinary(new Uint8Array([0x5F]).buffer, 'hifloat8').values[0]).toBe(0.013671875);
+  });
+
+  // HiFloat8 — D=4 region (exp=±8..±15, 1-bit mantissa, bytes 0x60-0x7F)
+  it('hifloat8 decodes D=4 boundary values', () => {
+    // 0x60: D=4, exp_sign=0, exp_stored=000 → exp_mag=(1<<3)|0=8, exp=+8, mant=0 → 256.0
+    expect(decodeBinary(new Uint8Array([0x60]).buffer, 'hifloat8').values[0]).toBe(256.0);
+    // 0x61: D=4, exp_sign=0, exp=+8, mant=1 → 256×1.5=384.0
+    expect(decodeBinary(new Uint8Array([0x61]).buffer, 'hifloat8').values[0]).toBe(384.0);
+    // 0x6E: D=4, exp_sign=0, exp=+15, mant=0 → 32768.0 (max finite positive)
+    expect(decodeBinary(new Uint8Array([0x6E]).buffer, 'hifloat8').values[0]).toBe(32768.0);
+    // 0x6F: D=4, exp=+15, mant=1 → +Inf
+    expect(decodeBinary(new Uint8Array([0x6F]).buffer, 'hifloat8').values[0]).toBe(Infinity);
+    // 0x70: D=4, exp_sign=1, exp_stored=000 → exp=-8, mant=0 → 1/256=0.00390625
+    expect(decodeBinary(new Uint8Array([0x70]).buffer, 'hifloat8').values[0]).toBe(0.00390625);
+    // 0x7F: D=4, exp_sign=1, exp=-15, mant=1 → 2^-15 × 1.5 = 4.57763671875e-05
+    expect(decodeBinary(new Uint8Array([0x7F]).buffer, 'hifloat8').values[0]).toBeCloseTo(4.57763671875e-05, 15);
+  });
+
+  // HiFloat8 — dynamic range
+  it('hifloat8 dynamic range: max finite, min positive', () => {
+    // Max finite positive: 0x6E = 32768 (2^15)
+    const maxFinite = decodeBinary(new Uint8Array([0x6E]).buffer, 'hifloat8').values[0];
+    expect(maxFinite).toBe(32768);
+    expect(Number.isFinite(maxFinite)).toBe(true);
+
+    // Second largest: 0x6D = 24576 (2^14 × 1.5)
+    expect(decodeBinary(new Uint8Array([0x6D]).buffer, 'hifloat8').values[0]).toBe(24576);
+
+    // Min positive denormal: 0x07 = 2^-22
+    const minDenormal = decodeBinary(new Uint8Array([0x07]).buffer, 'hifloat8').values[0];
+    expect(minDenormal).toBeCloseTo(Math.pow(2, -22), 15);
+
+    // Min positive normal: 0x08 = 1.0
+    expect(decodeBinary(new Uint8Array([0x08]).buffer, 'hifloat8').values[0]).toBe(1.0);
+  });
+
+  // HiFloat8 — total representable values count
+  it('hifloat8 has expected number of unique finite positive values', () => {
+    // Decode all 128 positive bytes (0x00-0x7F), count unique finite non-zero values
+    const positiveValues = new Set<number>();
+    for (let b = 0; b < 128; b++) {
+      const v = decodeBinary(new Uint8Array([b]).buffer, 'hifloat8').values[0];
+      if (v !== 0 && Number.isFinite(v) && !Number.isNaN(v)) {
+        positiveValues.add(v);
+      }
+    }
+    // 127 non-zero bytes: 7 denormal + 8 D0+ + 16 D1 + 32 D2 + 32 D3 + 32 D4 = 127
+    // But 0x6F = Inf (not finite), so 126 unique finite positive values
+    expect(positiveValues.size).toBe(126);
+  });
+
   // Float16
   it('decodes float16 values', () => {
     // float16 1.0 = 0x3C00 (LE: 0x00, 0x3C)
@@ -797,12 +924,120 @@ describe('parseTxtData', () => {
   });
 });
 
+// ─── HiFloat8 Comparison Tests ──────────────────────────────────────────────
+
+describe('hifloat8 comparison', () => {
+  function hif8Decode(bytes: number[]): DecodedData {
+    const buf = new Uint8Array(bytes).buffer;
+    return decodeBinary(buf, 'hifloat8');
+  }
+
+  it('compareValues: identical hifloat8 arrays yield zero diffs', () => {
+    const d1 = hif8Decode([0x08, 0x10, 0x40, 0x60]); // 1.0, 2.0, 16.0, 256.0
+    const d2 = hif8Decode([0x08, 0x10, 0x40, 0x60]);
+    const result = compareValues(d1.values, d2.values);
+    expect(result.diffCount).toBe(0);
+    expect(result.matchCount).toBe(4);
+  });
+
+  it('compareValues: differing hifloat8 arrays report correct diffs', () => {
+    const d1 = hif8Decode([0x08, 0x10, 0x40, 0x60]); // 1.0, 2.0, 16.0, 256.0
+    const d2 = hif8Decode([0x08, 0x18, 0x40, 0x61]); // 1.0, 0.5, 16.0, 384.0
+    const result = compareValues(d1.values, d2.values);
+    expect(result.diffCount).toBe(2);
+    expect(result.diffIndices.has(1)).toBe(true);
+    expect(result.diffIndices.has(3)).toBe(true);
+    expect(result.matchCount).toBe(2);
+  });
+
+  it('compareValues: NaN-vs-NaN treated as equal in hifloat8', () => {
+    const d1 = hif8Decode([0x80, 0x08]); // NaN, 1.0
+    const d2 = hif8Decode([0x80, 0x08]); // NaN, 1.0
+    const result = compareValues(d1.values, d2.values);
+    expect(result.diffCount).toBe(0);
+    expect(result.matchCount).toBe(2);
+  });
+
+  it('compareValues: NaN-vs-number is a diff in hifloat8', () => {
+    const d1 = hif8Decode([0x80, 0x08]); // NaN, 1.0
+    const d2 = hif8Decode([0x08, 0x80]); // 1.0, NaN
+    const result = compareValues(d1.values, d2.values);
+    expect(result.diffCount).toBe(2);
+    expect(result.diffIndices.has(0)).toBe(true);
+    expect(result.diffIndices.has(1)).toBe(true);
+  });
+
+  it('compareValues: Inf-vs-Inf treated as equal', () => {
+    const d1 = hif8Decode([0x6F, 0xEF]); // +Inf, -Inf
+    const d2 = hif8Decode([0x6F, 0xEF]); // +Inf, -Inf
+    const result = compareValues(d1.values, d2.values);
+    expect(result.diffCount).toBe(0);
+    expect(result.matchCount).toBe(2);
+  });
+
+  it('compareValues: +Inf vs -Inf is a diff', () => {
+    const d1 = hif8Decode([0x6F]); // +Inf
+    const d2 = hif8Decode([0xEF]); // -Inf
+    const result = compareValues(d1.values, d2.values);
+    expect(result.diffCount).toBe(1);
+  });
+
+  it('compareValues: tolerance applied to hifloat8 values', () => {
+    const d1 = hif8Decode([0x08, 0x09]); // 1.0, 1.125
+    const d2 = hif8Decode([0x09, 0x0A]); // 1.125, 1.25
+    // Without tolerance: 2 diffs
+    expect(compareValues(d1.values, d2.values, 0).diffCount).toBe(2);
+    // With tolerance 0.125: differences are 0.125 each, exactly at boundary → match
+    expect(compareValues(d1.values, d2.values, 0.125).diffCount).toBe(0);
+    // With tolerance 0.1: differences 0.125 > 0.1, still diffs
+    expect(compareValues(d1.values, d2.values, 0.1).diffCount).toBe(2);
+  });
+
+  it('compareData: wrapper works with hifloat8 DecodedData', () => {
+    const d1 = hif8Decode([0x10, 0x20, 0x40]);
+    const d2 = hif8Decode([0x10, 0x30, 0x40]);
+    const result = compareData(d1, d2);
+    expect(result.diffCount).toBe(1);
+    expect(result.diffIndices.has(1)).toBe(true);
+    expect(result.totalCompared).toBe(3);
+  });
+});
+
+// ─── HiFloat8 formatValue Tests ─────────────────────────────────────────────
+
+describe('hifloat8 formatValue', () => {
+  it('formats normal hifloat8 values', () => {
+    // formatValue uses toPrecision-style for floats, so expect fixed-precision output
+    const v1 = formatValue(1.0, 'hifloat8', 6);
+    expect(parseFloat(v1)).toBe(1.0);
+    const v256 = formatValue(256.0, 'hifloat8', 6);
+    expect(parseFloat(v256)).toBe(256.0);
+    const v023 = formatValue(0.234375, 'hifloat8', 6);
+    expect(parseFloat(v023)).toBeCloseTo(0.234375, 6);
+  });
+
+  it('formats hifloat8 special values', () => {
+    expect(formatValue(Infinity, 'hifloat8', 6)).toContain('Inf');
+    expect(formatValue(-Infinity, 'hifloat8', 6)).toContain('-Inf');
+    expect(formatValue(NaN, 'hifloat8', 6)).toBe('NaN');
+    const v0 = formatValue(0, 'hifloat8', 6);
+    expect(parseFloat(v0)).toBe(0);
+  });
+
+  it('formats hifloat8 denormal values with sufficient precision', () => {
+    const val = Math.pow(2, -22);
+    const formatted = formatValue(val, 'hifloat8', 10);
+    const parsed = parseFloat(formatted);
+    expect(parsed).toBeCloseTo(val, 15);
+  });
+});
+
 // ─── DTYPE_INFO ──────────────────────────────────────────────────────────────
 
 describe('DTYPE_INFO', () => {
-  it('has entries for all 16 dtypes', () => {
+  it('has entries for all 17 dtypes', () => {
     const dtypes: DType[] = [
-      'float8_e4m3', 'float8_e5m2', 'float8_e8m0',
+      'float8_e4m3', 'float8_e5m2', 'float8_e8m0', 'hifloat8',
       'float16', 'bfloat16', 'float32', 'float64',
       'int8', 'int16', 'int32', 'int64',
       'uint8', 'uint16', 'uint32', 'uint64',
