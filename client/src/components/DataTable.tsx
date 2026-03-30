@@ -13,6 +13,12 @@ interface DataTableProps {
   onCellClick?: (index: number) => void;
   columns?: number;
   precision?: number;
+  // Controlled pagination (for scroll sync)
+  page?: number;
+  onPageChange?: (page: number) => void;
+  // Scroll sync
+  onScrollSync?: (scrollTop: number) => void;
+  externalScrollTop?: number;
 }
 
 const ROWS_PER_PAGE = 200;
@@ -39,23 +45,57 @@ export default function DataTable({
   onCellClick,
   columns = 8,
   precision = 6,
+  page: controlledPage,
+  onPageChange,
+  onScrollSync,
+  externalScrollTop,
 }: DataTableProps) {
-  const [page, setPage] = useState(0);
+  const [internalPage, setInternalPage] = useState(0);
+  const activePage = controlledPage ?? internalPage;
+  const setActivePage = useCallback((p: number | ((prev: number) => number)) => {
+    const next = typeof p === 'function' ? p(controlledPage ?? internalPage) : p;
+    if (onPageChange) onPageChange(next);
+    else setInternalPage(next);
+  }, [controlledPage, internalPage, onPageChange]);
+
   const [searchIndex, setSearchIndex] = useState('');
   const [jumpToIndex, setJumpToIndex] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const tableRef = useRef<HTMLDivElement>(null);
+  const isExternalScrollRef = useRef(false);
 
   const totalRows = Math.ceil(data.elementCount / columns);
   const totalPages = Math.ceil(totalRows / ROWS_PER_PAGE);
 
   // Reset page when data changes
   useEffect(() => {
-    setPage(0);
+    setActivePage(0);
   }, [data.elementCount, columns]);
 
+  // Scroll sync: apply external scroll position
+  useEffect(() => {
+    if (externalScrollTop != null && tableRef.current) {
+      isExternalScrollRef.current = true;
+      tableRef.current.scrollTop = externalScrollTop;
+      requestAnimationFrame(() => { isExternalScrollRef.current = false; });
+    }
+  }, [externalScrollTop]);
+
+  // Scroll sync: forward scroll events
+  useEffect(() => {
+    const el = tableRef.current;
+    if (!el || !onScrollSync) return;
+    const handler = () => {
+      if (!isExternalScrollRef.current) {
+        onScrollSync(el.scrollTop);
+      }
+    };
+    el.addEventListener('scroll', handler, { passive: true });
+    return () => el.removeEventListener('scroll', handler);
+  }, [onScrollSync]);
+
   const visibleRows = useMemo(() => {
-    const startRow = page * ROWS_PER_PAGE;
+    const startRow = activePage * ROWS_PER_PAGE;
     const endRow = Math.min(startRow + ROWS_PER_PAGE, totalRows);
     const rows: { rowIndex: number; cells: { index: number; value: number; hex: string }[] }[] = [];
 
@@ -74,33 +114,33 @@ export default function DataTable({
       rows.push({ rowIndex: r, cells });
     }
     return rows;
-  }, [data, page, columns, showHex, totalRows]);
+  }, [data, activePage, columns, showHex, totalRows]);
 
   const diffStats = useMemo(() => {
     if (!diffIndices) return null;
-    const startIdx = page * ROWS_PER_PAGE * columns;
+    const startIdx = activePage * ROWS_PER_PAGE * columns;
     const endIdx = Math.min(startIdx + ROWS_PER_PAGE * columns, data.elementCount);
     let count = 0;
     for (let i = startIdx; i < endIdx; i++) {
       if (diffIndices.has(i)) count++;
     }
     return { pageCount: count, totalCount: diffIndices.size };
-  }, [diffIndices, page, columns, data.elementCount]);
+  }, [diffIndices, activePage, columns, data.elementCount]);
 
   const handleSearch = useCallback(() => {
     const idx = parseInt(searchIndex, 10);
     if (!isNaN(idx) && idx >= 0 && idx < data.elementCount) {
       const targetRow = Math.floor(idx / columns);
       const targetPage = Math.floor(targetRow / ROWS_PER_PAGE);
-      setPage(targetPage);
+      setActivePage(targetPage);
       setJumpToIndex(idx);
     }
-  }, [searchIndex, data.elementCount, columns]);
+  }, [searchIndex, data.elementCount, columns, setActivePage]);
 
   const navigateDiff = useCallback((direction: 'next' | 'prev') => {
     if (!diffIndices || diffIndices.size === 0) return;
     const sorted = Array.from(diffIndices).sort((a, b) => a - b);
-    const currentStart = page * ROWS_PER_PAGE * columns;
+    const currentStart = activePage * ROWS_PER_PAGE * columns;
     const currentCenter = currentStart + Math.floor(ROWS_PER_PAGE * columns / 2);
 
     let target: number;
@@ -112,9 +152,9 @@ export default function DataTable({
 
     const targetRow = Math.floor(target / columns);
     const targetPage = Math.floor(targetRow / ROWS_PER_PAGE);
-    setPage(targetPage);
+    setActivePage(targetPage);
     setJumpToIndex(target);
-  }, [diffIndices, page, columns]);
+  }, [diffIndices, activePage, columns, setActivePage]);
 
   useEffect(() => {
     if (jumpToIndex !== null) {
@@ -285,13 +325,13 @@ export default function DataTable({
       {totalPages > 1 && (
         <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-card/80 shrink-0">
           <span className="text-[11px] text-muted-foreground font-mono">
-            Page {page + 1} / {totalPages}
+            Page {activePage + 1} / {totalPages}
           </span>
           <div className="flex items-center gap-1">
-            <PaginationButton onClick={() => setPage(0)} disabled={page === 0}>First</PaginationButton>
-            <PaginationButton onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}>Prev</PaginationButton>
-            <PaginationButton onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}>Next</PaginationButton>
-            <PaginationButton onClick={() => setPage(totalPages - 1)} disabled={page >= totalPages - 1}>Last</PaginationButton>
+            <PaginationButton onClick={() => setActivePage(0)} disabled={activePage === 0}>First</PaginationButton>
+            <PaginationButton onClick={() => setActivePage(Math.max(0, activePage - 1))} disabled={activePage === 0}>Prev</PaginationButton>
+            <PaginationButton onClick={() => setActivePage(Math.min(totalPages - 1, activePage + 1))} disabled={activePage >= totalPages - 1}>Next</PaginationButton>
+            <PaginationButton onClick={() => setActivePage(totalPages - 1)} disabled={activePage >= totalPages - 1}>Last</PaginationButton>
           </div>
         </div>
       )}
