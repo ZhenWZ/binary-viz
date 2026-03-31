@@ -132,7 +132,8 @@ export default function BitCompareMode({ init, onInitConsumed }: BitCompareModeP
 
   // ─── Computed Bit Data ──────────────────────────────────────────────────
 
-  const fields = useMemo(() => getBitFields(dtype), [dtype]);
+  // For non-hifloat8 dtypes, shared fields; for hifloat8, computed per-entry
+  const sharedFields = useMemo(() => dtype !== 'hifloat8' ? getBitFields(dtype) : null, [dtype]);
 
   const bitData = useMemo(() => {
     return entries.map((entry) => {
@@ -142,9 +143,13 @@ export default function BitCompareMode({ init, onInitConsumed }: BitCompareModeP
       const val = decoded.values[0];
       const decodedStr = formatValue(val, dtype, 8);
       const hexStr = Array.from(entry.bytes).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
-      return { bits, decodedValue: decodedStr, hexValue: hexStr };
+      // Per-entry fields for hifloat8
+      const fields = dtype === 'hifloat8'
+        ? getBitFields('hifloat8', entry.bytes[0])
+        : sharedFields!;
+      return { bits, decodedValue: decodedStr, hexValue: hexStr, fields };
     });
-  }, [entries, dtype, byteOrder]);
+  }, [entries, dtype, byteOrder, sharedFields]);
 
   const validBitStrings = bitData.filter((d): d is NonNullable<typeof d> => d !== null).map(d => d.bits);
   const diffIndices = useMemo(() => computeBitDiffs(validBitStrings), [validBitStrings]);
@@ -301,36 +306,52 @@ export default function BitCompareMode({ init, onInitConsumed }: BitCompareModeP
             {entries.map((entry, idx) => {
               const data = bitData[idx];
               if (!data) return null;
+              const isHiFloat8 = dtype === 'hifloat8';
               return (
                 <BitGrid
                   key={entry.id}
                   bits={data.bits}
-                  fields={fields}
+                  fields={data.fields}
                   diffIndices={diffIndices}
                   hexValue={data.hexValue}
                   decodedValue={data.decodedValue}
                   dtype={dtype}
                   label={`#${idx + 1}`}
-                  showFieldLabels={idx === 0}
+                  showFieldLabels={isHiFloat8 ? true : idx === 0}
                 />
               );
             })}
           </div>
 
           {/* Field legend */}
-          {fields.length > 0 && (
-            <div className="flex items-center gap-3 mt-3 pt-3 border-t border-border/30">
-              <span className="text-[10px] text-muted-foreground">Fields:</span>
-              {fields.map((f) => (
-                <span
-                  key={f.name}
-                  className={`text-[10px] font-medium text-${f.color}-400`}
-                >
-                  {f.name} [{f.end - f.start}b]
-                </span>
-              ))}
-            </div>
-          )}
+          {(() => {
+            const legendFields = dtype === 'hifloat8'
+              ? [
+                  { name: 'S', color: 'amber' },
+                  { name: 'Dot', color: 'violet' },
+                  { name: 'Exp', color: 'sky' },
+                  { name: 'Mant', color: 'emerald' },
+                ]
+              : (sharedFields ?? []).map((f) => ({ name: f.name, color: f.color }));
+            return legendFields.length > 0 && (
+              <div className="flex items-center gap-3 mt-3 pt-3 border-t border-border/30">
+                <span className="text-[10px] text-muted-foreground">Fields:</span>
+                {legendFields.map((f) => (
+                  <span
+                    key={f.name}
+                    className={`text-[10px] font-medium text-${f.color}-400`}
+                  >
+                    {f.name}
+                  </span>
+                ))}
+                {dtype === 'hifloat8' && (
+                  <span className="text-[10px] text-muted-foreground/50 italic ml-1">
+                    (field widths vary per value)
+                  </span>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 

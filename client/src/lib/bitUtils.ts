@@ -186,8 +186,63 @@ export function bytesToBits(bytes: Uint8Array, byteOrder: ByteOrder): string {
 
 // ─── Bit Field Annotations ──────────────────────────────────────────────────
 
-/** Return bit field layout for a given dtype (MSB-first indexing). */
-export function getBitFields(dtype: DType): BitField[] {
+/**
+ * Parse HiFloat8 byte to determine dynamic field boundaries.
+ * HiFloat8 uses variable-width Dot prefix codes:
+ *   11xx xxxx → D=4: Dot(2) + Exp(4) + Mant(1)
+ *   10xx xxxx → D=3: Dot(2) + Exp(3) + Mant(2)
+ *   01xx xxxx → D=2: Dot(2) + Exp(2) + Mant(3)
+ *   001x xxxx → D=1: Dot(3) + Exp(1) + Mant(3)
+ *   0001 xxxx → D=0+: Dot(4) + Exp(0) + Mant(3)
+ *   0000 xxxx → D=0-: Dot(4) + Exp(0) + Mant(3)
+ * Bit indices are MSB-first: index 0 = bit 7 (sign).
+ */
+export function getHiFloat8BitFields(byte: number): BitField[] {
+  const fields: BitField[] = [
+    { name: 'S', start: 0, end: 1, color: 'amber' },
+  ];
+
+  // Payload bits: indices 1-7 (bits 6..0 of byte)
+  const bit6 = (byte >> 6) & 1;
+  const bit5 = (byte >> 5) & 1;
+  const bit4 = (byte >> 4) & 1;
+
+  let dotLen: number;
+  let expLen: number;
+
+  if (bit6 === 1 && bit5 === 1) {
+    // "11" → D=4
+    dotLen = 2; expLen = 4;
+  } else if (bit6 === 1 && bit5 === 0) {
+    // "10" → D=3
+    dotLen = 2; expLen = 3;
+  } else if (bit6 === 0 && bit5 === 1) {
+    // "01" → D=2
+    dotLen = 2; expLen = 2;
+  } else if (bit4 === 1) {
+    // "001" → D=1
+    dotLen = 3; expLen = 1;
+  } else {
+    // "0001" or "0000" → D=0 (denormal)
+    dotLen = 4; expLen = 0;
+  }
+
+  const dotStart = 1;
+  const dotEnd = dotStart + dotLen;
+  fields.push({ name: 'Dot', start: dotStart, end: dotEnd, color: 'violet' });
+
+  if (expLen > 0) {
+    fields.push({ name: 'Exp', start: dotEnd, end: dotEnd + expLen, color: 'sky' });
+  }
+
+  fields.push({ name: 'Mant', start: dotEnd + expLen, end: 8, color: 'emerald' });
+
+  return fields;
+}
+
+/** Return bit field layout for a given dtype (MSB-first indexing).
+ *  For hifloat8, pass byteValue to get per-value dynamic fields. */
+export function getBitFields(dtype: DType, byteValue?: number): BitField[] {
   const totalBits = DTYPE_INFO[dtype].bytes * 8;
 
   switch (dtype) {
@@ -208,7 +263,11 @@ export function getBitFields(dtype: DType): BitField[] {
         { name: 'Exp', start: 0, end: 8, color: 'sky' },
       ];
     case 'hifloat8':
-      // Variable-width fields — show sign + remaining as "Dot+Exp+Mant"
+      // Variable-width fields depend on actual byte value
+      if (byteValue !== undefined) {
+        return getHiFloat8BitFields(byteValue);
+      }
+      // Fallback when no byte value available (generic label)
       return [
         { name: 'S', start: 0, end: 1, color: 'amber' },
         { name: 'Dot+Exp+Mant', start: 1, end: 8, color: 'violet' },
